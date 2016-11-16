@@ -119,8 +119,8 @@ module.exports = function(app) {
 
   plugin.schema = {
     title: "Push Notifications",
-    /*
     properties: {
+      /*
       devices: {
         type: "array",
         title: " ",
@@ -147,10 +147,10 @@ module.exports = function(app) {
           }
         }
       }
+*/
     }
-    */
+    
   }
-
   return plugin;
 }
 
