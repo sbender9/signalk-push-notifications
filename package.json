@@ -1,0 +1,24 @@
+{
+  "name": "signalk-push-notifications",
+  "version": "1.0.0",
+  "description": "sognalk-node-server plugin that pushes SignalK notifications to Amazon SNS",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "signalk-node-server-plugin"
+  ],
+  "author": "scott@scottbender.net",
+  "license": "ISC",
+  "dependencies": {
+    "baconjs": "^0.7.88",
+    "debug": "^2.2.0",
+    "lodash": "^3.10.1",
+    "aws-sdk": "^2.6.15"
+  },
+   "repository": {
+    "type" : "git",
+    "url" : "https://github.com/sbender9/signalk-push-notifications"
+  }
+}
