@@ -39,22 +39,24 @@ module.exports = function(app) {
       }]
     }
     
-    app.subscriptionmanager.subscribe(command, unsubscribes,
-                                      function(err)
-                                      {
-                                        debug("error: " + err)
-                                      },
-                                      function(notification)
-                                      {
-                                        handleNotificationDelta(app, plugin.id,
-                                                                notification,
-                                                               last_states)
-                                      })
+    app.subscriptionmanager.subscribe(command, unsubscribes, subscription_error, got_delta)
     //devices = readJson(app, "devices" , plugin.id)
     //send_push(app, devices[Object.keys(devices)[0]], "Hellow", "some.path")
     
     debug("started")
   };
+
+  function subscription_error(err)
+  {
+    debug("error: " + err)
+  }
+
+  function got_delta(notification)
+  {
+    handleNotificationDelta(app, plugin.id,
+                            notification,
+                            last_states)
+  }
 
   plugin.registerWithRouter = function(router) {
     router.post("/registerDevice", (req, res) => {
@@ -123,13 +125,14 @@ module.exports = function(app) {
         saveJson(app, "devices", plugin.id, devices, res)
       }
     })    
-  }  
+  }
   
   plugin.stop = function() {
     debug("stopping")
-    if (unsubscribe) {
-      unsubscribe()
-    }
+
+    unsubscribes.forEach(function(func) { func() })
+    unsubscribes = []
+    
     debug("stopped")
   }
   
