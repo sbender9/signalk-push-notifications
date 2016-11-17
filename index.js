@@ -22,14 +22,34 @@ const _ = require('lodash')
 var AWS = require('aws-sdk');
 
 module.exports = function(app) {
-  var unsubscribe = undefined
+  var unsubscribes = []
   var plugin = {}
   var deviceid
+  var last_states = {}
   
   plugin.start = function(props) {
     debug("starting...")
     deviceid = props.deviceid
 
+    command = {
+      context: "vessels.self",
+      subscribe: [{
+        path: "notifications.*",
+        minPeriod: 1000
+      }]
+    }
+    
+    app.subscriptionmanager.subscribe(command, unsubscribes,
+                                      function(err)
+                                      {
+                                        debug("error: " + err)
+                                      },
+                                      function(notification)
+                                      {
+                                        handleNotificationDelta(app, plugin.id,
+                                                                notification,
+                                                               last_states)
+                                      })
     //devices = readJson(app, "devices" , plugin.id)
     //send_push(app, devices[Object.keys(devices)[0]], "Hellow", "some.path")
     
@@ -154,6 +174,39 @@ module.exports = function(app) {
   return plugin;
 }
 
+function handleNotificationDelta(app, id, notification, last_states)
+{
+  var uuid = "urn:mrn:signalk:uuid" + app.signalk.self.uuid
+  debug("notification: " +
+        util.inspect(notification, {showHidden: false, depth: 6}))
+
+  devices = readJson(app, "devices", id)
+
+  notification.updates.forEach(function(update) {
+    update.values.forEach(function(value) {
+      _.forIn(devices, function(device, arn) {
+        if ( value.value != null
+             && typeof value.value.message != 'undefined'
+             && value.value.message != null )
+        {
+          if ( last_states[value.path] == null
+               || last_states[value.path] != value.value.state )
+          {
+            last_states[value.path] = value.value.state
+            debug("message:" + value.value.message)
+            send_push(app, device, value.value.message, value.path)
+          }
+        }
+        else if ( last_states[value.path] )
+        {
+          delete last_states[value.path]
+        }
+      })
+    })
+  })
+}
+
+
 function pathForPluginId(app, id, name) {
   return path.join(app.config.appPath, "/plugin-config-data", id + "-" + name + '.json')
 }
@@ -204,6 +257,9 @@ function send_push(app, device, message, path)
   });
 
   aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default' }, 'path': path }
+
+  aps["aps"]["category"] = path == "notifications.autopilot.PilotWayPointAdvance"
+    ? 'advance_waypoint' : "alarm"
   
   var payload = {
     default: message,
