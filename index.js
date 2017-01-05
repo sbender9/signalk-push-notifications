@@ -35,7 +35,7 @@ module.exports = function(app) {
       context: "vessels.self",
       subscribe: [{
         path: "notifications.*",
-        minPeriod: 1000
+        policy: 'instant'
       }]
     }
     
@@ -187,25 +187,26 @@ function handleNotificationDelta(app, id, notification, last_states)
 
   notification.updates.forEach(function(update) {
     update.values.forEach(function(value) {
-      if ( value.value != null
-           && typeof value.value.message != 'undefined'
-           && value.value.message != null )
-      {
-        if ( last_states[value.path] == null
-               || last_states[value.path] != value.value.state )
+        if ( value.value != null
+             && typeof value.value.message != 'undefined'
+             && value.value.message != null )
         {
-          last_states[value.path] = value.value.state
-          debug("message:" + value.value.message)
-
-          _.forIn(devices, function(device, arn) {
-            send_push(app, device, value.value.message, value.path)
-          })
+          if ( (last_states[value.path] == null
+                && value.value.state != 'normal')
+               || ( last_states[value.path] != null
+                    && last_states[value.path] != value.value.state) )
+          {
+            last_states[value.path] = value.value.state
+            debug("message:" + value.value.message)
+            _.forIn(devices, function(device, arn) {
+              send_push(app, device, value.value.message, value.path)
+            })
+          }
         }
         else if ( last_states[value.path] )
         {
           delete last_states[value.path]
         }
-      }
     })
   })
 }
