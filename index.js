@@ -187,24 +187,25 @@ function handleNotificationDelta(app, id, notification, last_states)
 
   notification.updates.forEach(function(update) {
     update.values.forEach(function(value) {
-      _.forIn(devices, function(device, arn) {
-        if ( value.value != null
-             && typeof value.value.message != 'undefined'
-             && value.value.message != null )
-        {
-          if ( last_states[value.path] == null
+      if ( value.value != null
+           && typeof value.value.message != 'undefined'
+           && value.value.message != null )
+      {
+        if ( last_states[value.path] == null
                || last_states[value.path] != value.value.state )
-          {
-            last_states[value.path] = value.value.state
-            debug("message:" + value.value.message)
+        {
+          last_states[value.path] = value.value.state
+          debug("message:" + value.value.message)
+
+          _.forIn(devices, function(device, arn) {
             send_push(app, device, value.value.message, value.path)
-          }
+          })
         }
         else if ( last_states[value.path] )
         {
           delete last_states[value.path]
         }
-      })
+      }
     })
   })
 }
@@ -276,7 +277,7 @@ function send_push(app, device, message, path)
   // then have to stringify the entire message payload
   payload = JSON.stringify(payload);
 
-  debug('sending push');
+  debug('sending push to ' + device.targetArn);
   sns.publish({
     Message: payload,
     MessageStructure: 'json',
