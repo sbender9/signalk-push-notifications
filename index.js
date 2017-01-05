@@ -35,7 +35,7 @@ module.exports = function(app) {
       context: "vessels.self",
       subscribe: [{
         path: "notifications.*",
-        minPeriod: 1000
+        policy: 'instant'
       }]
     }
     
@@ -192,13 +192,17 @@ function handleNotificationDelta(app, id, notification, last_states)
              && typeof value.value.message != 'undefined'
              && value.value.message != null )
         {
-          if ( last_states[value.path] == null
-               || last_states[value.path] != value.value.state )
+          if ( (last_states[value.path] == null
+                && value.value.state != 'normal')
+               || ( last_states[value.path] != null
+                    && last_states[value.path] != value.value.state) )
           {
             last_states[value.path] = value.value.state
             debug("message:" + value.value.message)
             send_push(app, device, value.value.message, value.path)
           }
+          else
+            debug("skipped")
         }
         else if ( last_states[value.path] )
         {
