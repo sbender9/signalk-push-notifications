@@ -211,9 +211,9 @@ function handleNotificationDelta(app, id, notification, last_states)
   })
 }
 
-
 function pathForPluginId(app, id, name) {
-  return path.join(app.config.appPath, "/plugin-config-data", id + "-" + name + '.json')
+  var dir = app.config.configPath || app.config.appPath
+  return path.join(dir, "/plugin-config-data", id + "-" + name + '.json')
 }
 
 function readJson(app, name, id) {

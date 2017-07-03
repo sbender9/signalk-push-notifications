@@ -1,6 +1,6 @@
 {
   "name": "signalk-push-notifications",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "sognalk-node-server plugin that pushes SignalK notifications to Amazon SNS",
   "main": "index.js",
   "scripts": {
@@ -9,7 +9,7 @@
   "keywords": [
     "signalk-node-server-plugin"
   ],
-  "author": "scott@scottbender.net",
+  "author": {"name": "Scott Bender", "email": "scott@scottbender.net"},
   "license": "ISC",
   "dependencies": {
     "baconjs": "^0.7.88",
