@@ -13,10 +13,8 @@
  * limitations under the License.
  */
 
-const debug = require('debug')('signalk:push-notifications')
 const Bacon = require('baconjs');
 const path = require('path')
-const util = require('util')
 const fs = require('fs')
 const _ = require('lodash')
 var AWS = require('aws-sdk');
@@ -28,10 +26,9 @@ module.exports = function(app) {
   var last_states = {}
   
   plugin.start = function(props) {
-    debug("starting...")
     deviceid = props.deviceid
 
-    command = {
+    var command = {
       context: "vessels.self",
       subscribe: [{
         path: "notifications.*",
@@ -42,13 +39,11 @@ module.exports = function(app) {
     app.subscriptionmanager.subscribe(command, unsubscribes, subscription_error, got_delta)
     //devices = readJson(app, "devices" , plugin.id)
     //send_push(app, devices[Object.keys(devices)[0]], "Hellow", "some.path")
-    
-    debug("started")
   };
 
   function subscription_error(err)
   {
-    debug("error: " + err)
+    app.error("error: " + err)
   }
 
   function got_delta(notification)
@@ -67,7 +62,7 @@ module.exports = function(app) {
            || typeof device.accessKey == 'undefined'
            || typeof device.secretAccessKey == 'undefined' )
       {
-        debug("invalid request: " + util.inspect(device, {showHidden: false, depth: 1}))
+        app.debug("invalid request: %O", device)
         res.status(400)
         res.send("Invalid Request")
         return
@@ -83,7 +78,7 @@ module.exports = function(app) {
       device = req.body
       if ( typeof device.targetArn == 'undefined' )
       {
-        debug("invalid request: " + util.inspect(device, {showHidden: false, depth: 1}))
+        app.debug("invalid request: %O", device)
         res.status(400)
         res.send("Invalid Request")
         return
@@ -106,7 +101,7 @@ module.exports = function(app) {
       device = req.body
       if ( typeof device.targetArn == 'undefined' )
       {
-        debug("invalid request: " + util.inspect(device, {showHidden: false, depth: 1}))
+        app.debug("invalid request:%O ", device)
         res.status(400)
         res.send("Invalid Request")
         return
@@ -128,12 +123,8 @@ module.exports = function(app) {
   }
   
   plugin.stop = function() {
-    debug("stopping")
-
     unsubscribes.forEach(function(func) { func() })
     unsubscribes = []
-    
-    debug("stopped")
   }
   
   plugin.id = "push-notifications"
@@ -179,9 +170,7 @@ module.exports = function(app) {
 
 function handleNotificationDelta(app, id, notification, last_states)
 {
-  var uuid = "urn:mrn:signalk:uuid" + app.signalk.self.uuid
-  debug("notification: " +
-        util.inspect(notification, {showHidden: false, depth: 6}))
+  app.debug("notification: %O", notification)
 
   devices = readJson(app, "devices", id)
 
@@ -197,7 +186,7 @@ function handleNotificationDelta(app, id, notification, last_states)
                     && last_states[value.path] != value.value.state) )
           {
             last_states[value.path] = value.value.state
-            debug("message:" + value.value.message)
+            app.debug("message: %s", value.value.message)
             _.forIn(devices, function(device, arn) {
               send_push(app, device, value.value.message, value.path)
             })
@@ -224,12 +213,12 @@ function readJson(app, name, id) {
     try {
       return JSON.parse(optionsAsString)
     } catch (e) {
-      console.error("Could not parse JSON options:" + optionsAsString);
+      app.error("Could not parse JSON options:" + optionsAsString);
       return {}
     }
   } catch (e) {
-    debug("Could not find options for plugin " + id + ", returning empty options")
-    debug(e.stack)
+    app.error("Could not find options for plugin " + id + ", returning empty options")
+    app.error(e.stack)
     return {}
   }
   return JSON.parse()
@@ -240,8 +229,8 @@ function saveJson(app, name, id, json, res)
   fs.writeFile(pathForPluginId(app, id, name), JSON.stringify(json, null, 2),
                function(err) {
                  if (err) {
-                   debug(err.stack)
-                   console.log(err)
+                   app.debug(err.stack)
+                   app.error(err)
                    res.status(500)
                    res.send(err)
                    return
@@ -278,7 +267,7 @@ function send_push(app, device, message, path)
   // then have to stringify the entire message payload
   payload = JSON.stringify(payload);
 
-  debug('sending push to ' + device.targetArn);
+  app.debug('sending push to ' + device.targetArn + "payload: " + payload);
   sns.publish({
     Message: payload,
     MessageStructure: 'json',
@@ -289,7 +278,7 @@ function send_push(app, device, message, path)
       return;
     }
     
-    debug('push sent');
+    app.debug('push sent');
   });
 }
 
