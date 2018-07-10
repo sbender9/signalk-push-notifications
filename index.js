@@ -188,7 +188,7 @@ function handleNotificationDelta(app, id, notification, last_states)
             last_states[value.path] = value.value.state
             app.debug("message: %s", value.value.message)
             _.forIn(devices, function(device, arn) {
-              send_push(app, device, value.value.message, value.path)
+              send_push(app, device, value.value.message, value.path, value.value.state)
             })
           }
         }
@@ -242,7 +242,7 @@ function saveJson(app, name, id, json, res)
                });
 }
 
-function send_push(app, device, message, path)
+function send_push(app, device, message, path, state)
 {
   var sns = new AWS.SNS({
     region: "us-east-1",
@@ -253,7 +253,7 @@ function send_push(app, device, message, path)
   aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default' }, 'path': path }
 
   aps["aps"]["category"] = path == "notifications.autopilot.PilotWayPointAdvance"
-    ? 'advance_waypoint' : "alarm"
+    ? 'advance_waypoint' : (state === 'normal' ? "alarm_normal" : "alarm")
   
   var payload = {
     default: message,
