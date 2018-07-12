@@ -229,7 +229,7 @@ function saveJson(app, name, id, json, res)
   fs.writeFile(pathForPluginId(app, id, name), JSON.stringify(json, null, 2),
                function(err) {
                  if (err) {
-                   app.debug(err.stack)
+                    app.debug(err.stack)
                    app.error(err)
                    res.status(500)
                    res.send(err)
@@ -249,6 +249,8 @@ function send_push(app, device, message, path, state)
     accessKeyId: device.accessKey,
     secretAccessKey: device.secretAccessKey
   });
+
+  message = `${state.charAt(0).toUpperCase() + state.slice(1)}: ${message}`
 
   aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default' }, 'path': path }
 
