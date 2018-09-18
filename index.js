@@ -170,7 +170,7 @@ module.exports = function(app) {
 
 function handleNotificationDelta(app, id, notification, last_states)
 {
-  app.debug("notification: %O", notification)
+  //app.debug("notification: %O", notification)
 
   devices = readJson(app, "devices", id)
 
@@ -252,10 +252,29 @@ function send_push(app, device, message, path, state)
 
   message = `${state.charAt(0).toUpperCase() + state.slice(1)}: ${message}`
 
-  aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default' }, 'path': path }
+  aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default' }, 'path': path, self: app.selfId }
 
-  aps["aps"]["category"] = path == "notifications.autopilot.PilotWayPointAdvance"
-    ? 'advance_waypoint' : (state === 'normal' ? "alarm_normal" : "alarm")
+  let category = (state === 'normal' ? "alarm_normal" : "alarm")
+
+  if ( state != 'normal' )
+  {
+    if ( path === "notifications.autopilot.PilotWayPointAdvance" )
+    {
+      category = 'advance_waypoint'
+    }
+    else if ( path === 'notifications.anchorAlarm' || path === 'notifications.navigation.anchor')
+    {
+      category = 'anchor_alarm'
+    }
+    else if ( path.startsWith('notifications.security.accessRequest') )
+    {
+      let parts = path.split('.')
+      let permissions = parts[parts.length-2]
+      category = `access_req_${permissions}`
+    }
+  }
+  
+  aps["aps"]["category"] = category
   
   var payload = {
     default: message,
