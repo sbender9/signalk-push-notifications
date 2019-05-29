@@ -172,7 +172,14 @@ function handleNotificationDelta(app, id, notification, last_states)
 {
   //app.debug("notification: %O", notification)
 
-  devices = readJson(app, "devices", id)
+  try {
+    devices = readJson(app, "devices", id)
+  } catch ( err ) {
+    if (e.code && e.code === 'ENOENT') {
+      //return
+    }
+    //app.error(err)
+  }
 
   notification.updates.forEach(function(update) {
     update.values.forEach(function(value) {
@@ -217,6 +224,9 @@ function readJson(app, name, id) {
       return {}
     }
   } catch (e) {
+    if (e.code && e.code === 'ENOENT') {
+      return {}
+    }
     app.error("Could not find options for plugin " + id + ", returning empty options")
     app.error(e.stack)
     return {}
@@ -244,6 +254,10 @@ function saveJson(app, name, id, json, res)
 
 function send_push(app, device, message, path, state)
 {
+  if ( message.startsWith('Unknown Seatalk Alarm') ) {
+    return
+  }
+
   var sns = new AWS.SNS({
     region: "us-east-1",
     accessKeyId: device.accessKey,
@@ -272,6 +286,8 @@ function send_push(app, device, message, path, state)
       let permissions = parts[parts.length-2]
       category = `access_req_${permissions}`
     }
+  } else if ( path === "notifications.autopilot.PilotWayPointAdvance" ) {
+    return
   }
   
   aps["aps"]["category"] = category
