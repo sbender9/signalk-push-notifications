@@ -17,7 +17,7 @@ const Bacon = require('baconjs');
 const path = require('path')
 const fs = require('fs')
 const _ = require('lodash')
-var AWS = require('aws-sdk');
+const AWS = require('aws-sdk');
 
 module.exports = function(app) {
   var unsubscribes = []
@@ -165,24 +165,23 @@ module.exports = function(app) {
     }
     
   }
-  return plugin;
-}
 
-function handleNotificationDelta(app, id, notification, last_states)
-{
-  //app.debug("notification: %O", notification)
 
-  try {
-    devices = readJson(app, "devices", id)
-  } catch ( err ) {
-    if (e.code && e.code === 'ENOENT') {
-      //return
+  function handleNotificationDelta(app, id, notification, last_states)
+  {
+    //app.debug("notification: %O", notification)
+
+    try {
+      devices = readJson(app, "devices", id)
+    } catch ( err ) {
+      if (e.code && e.code === 'ENOENT') {
+        //return
+      }
+      //app.error(err)
     }
-    //app.error(err)
-  }
 
-  notification.updates.forEach(function(update) {
-    update.values.forEach(function(value) {
+    notification.updates.forEach(function(update) {
+      update.values.forEach(function(value) {
         if ( value.value != null
              && typeof value.value.message != 'undefined'
              && value.value.message != null )
@@ -203,120 +202,126 @@ function handleNotificationDelta(app, id, notification, last_states)
         {
           delete last_states[value.path]
         }
+      })
     })
-  })
-}
+  }
 
-function pathForPluginId(app, id, name) {
-  var dir = app.config.configPath || app.config.appPath
-  return path.join(dir, "/plugin-config-data", id + "-" + name + '.json')
-}
+  function pathForPluginId(app, id, name) {
+    var dir = app.config.configPath || app.config.appPath
+    return path.join(dir, "/plugin-config-data", id + "-" + name + '.json')
+  }
 
-function readJson(app, name, id) {
-  try
-  {
-    const path = pathForPluginId(app, id, name)
-    const optionsAsString = fs.readFileSync(path, 'utf8');
-    try {
-      return JSON.parse(optionsAsString)
+  function readJson(app, name, id) {
+    try
+    {
+      const path = pathForPluginId(app, id, name)
+      const optionsAsString = fs.readFileSync(path, 'utf8');
+      try {
+        return JSON.parse(optionsAsString)
+      } catch (e) {
+        app.error("Could not parse JSON options:" + optionsAsString);
+        return {}
+      }
     } catch (e) {
-      app.error("Could not parse JSON options:" + optionsAsString);
+      if (e.code && e.code === 'ENOENT') {
+        return {}
+      }
+      app.error("Could not find options for plugin " + id + ", returning empty options")
+      app.error(e.stack)
       return {}
     }
-  } catch (e) {
-    if (e.code && e.code === 'ENOENT') {
-      return {}
-    }
-    app.error("Could not find options for plugin " + id + ", returning empty options")
-    app.error(e.stack)
-    return {}
-  }
-  return JSON.parse()
-}
-
-function saveJson(app, name, id, json, res)
-{
-  fs.writeFile(pathForPluginId(app, id, name), JSON.stringify(json, null, 2),
-               function(err) {
-                 if (err) {
-                    app.debug(err.stack)
-                   app.error(err)
-                   res.status(500)
-                   res.send(err)
-                   return
-                 }
-                 else
-                 {
-                   res.send("Success\n")
-                 }
-               });
-}
-
-function send_push(app, device, message, path, state)
-{
-  if ( message.startsWith('Unknown Seatalk Alarm') ) {
-    return
+    return JSON.parse()
   }
 
-  var sns = new AWS.SNS({
-    region: "us-east-1",
-    accessKeyId: device.accessKey,
-    secretAccessKey: device.secretAccessKey
-  });
-
-  message = `${state.charAt(0).toUpperCase() + state.slice(1)}: ${message}`
-
-  aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default' }, 'path': path, self: app.selfId }
-
-  let category = (state === 'normal' ? "alarm_normal" : "alarm")
-
-  if ( state != 'normal' )
+  function saveJson(app, name, id, json, res)
   {
-    if ( path === "notifications.autopilot.PilotWayPointAdvance" )
-    {
-      category = 'advance_waypoint'
-    }
-    else if ( path === 'notifications.anchorAlarm' || path === 'notifications.navigation.anchor')
-    {
-      category = 'anchor_alarm'
-    }
-    else if ( path.startsWith('notifications.security.accessRequest') )
-    {
-      let parts = path.split('.')
-      let permissions = parts[parts.length-2]
-      category = `access_req_${permissions}`
-    }
-  } else if ( path === "notifications.autopilot.PilotWayPointAdvance" ) {
-    return
+    fs.writeFile(pathForPluginId(app, id, name), JSON.stringify(json, null, 2),
+                 function(err) {
+                   if (err) {
+                     app.debug(err.stack)
+                     app.error(err)
+                     res.status(500)
+                     res.send(err)
+                     return
+                   }
+                   else
+                   {
+                     res.send("Success\n")
+                   }
+                 });
   }
-  
-  aps["aps"]["category"] = category
-  
-  var payload = {
-    default: message,
-    APNS: aps,
-    APNS_SANDBOX: aps
-  };
 
-  // first have to stringify the inner APNS object...
-  payload.APNS = JSON.stringify(payload.APNS);
-  payload.APNS_SANDBOX = JSON.stringify(payload.APNS_SANDBOX);  
-  // then have to stringify the entire message payload
-  payload = JSON.stringify(payload);
+  function send_push(app, device, message, path, state)
+  {
+    if ( message.startsWith('Unknown Seatalk Alarm') ) {
+      return
+    }
 
-  app.debug('sending push to ' + device.targetArn + "payload: " + payload);
-  sns.publish({
-    Message: payload,
-    MessageStructure: 'json',
-    TargetArn: device.targetArn
-  }, function(err, data) {
-    if (err) {
-      console.log(err.stack);
-      return;
+    var sns = new AWS.SNS({
+      region: "us-east-1",
+      accessKeyId: device.accessKey,
+      secretAccessKey: device.secretAccessKey
+    });
+
+    message = `${state.charAt(0).toUpperCase() + state.slice(1)}: ${message}`
+
+    aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default', 'content-available': 1 }, 'path': path, self: app.selfId }                           
+
+
+    let category = (state === 'normal' ? "alarm_normal" : "alarm")
+
+    if ( state != 'normal' )
+    {
+      if ( path === "notifications.autopilot.PilotWayPointAdvance" )
+      {
+        category = 'advance_waypoint'
+      }
+      else if ( path === 'notifications.anchorAlarm' || path === 'notifications.navigation.anchor')
+      {
+        category = 'anchor_alarm'
+      }
+      else if ( path.startsWith('notifications.security.accessRequest') )
+      {
+        let parts = path.split('.')
+        let permissions = parts[parts.length-2]
+        category = `access_req_${permissions}`
+      }
+    } else if ( path === "notifications.autopilot.PilotWayPointAdvance" ) {
+      return
     }
     
-    app.debug('push sent');
-  });
-}
+    aps["aps"]["category"] = category
+    
+    var payload = {
+      default: message,
+      APNS: aps,
+      APNS_SANDBOX: aps
+    };
 
+    // first have to stringify the inner APNS object...
+    payload.APNS = JSON.stringify(payload.APNS);
+    payload.APNS_SANDBOX = JSON.stringify(payload.APNS_SANDBOX);
+
+    app.debug('sending push to ' + device.targetArn + "payload: " + JSON.stringify(payload, null, 2));
+    
+    // then have to stringify the entire message payload
+    payload = JSON.stringify(payload);
+
+    
+    sns.publish({
+      Message: payload,
+      MessageStructure: 'json',
+      TargetArn: device.targetArn
+    }, function(err, data) {
+      if (err) {
+        console.log(err.stack);
+        return;
+      }
+      
+      app.debug('push sent');
+    });
+  }
+
+  return plugin;
+}
 
