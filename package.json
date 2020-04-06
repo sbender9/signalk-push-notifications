@@ -15,7 +15,7 @@
   },
   "license": "ISC",
   "dependencies": {
-    "aws-sdk": "^2.632.0",
+    "aws-sdk": "^2.654.0",
     "baconjs": "^0.7.88",
     "lodash": "^4.17.4"
   },
