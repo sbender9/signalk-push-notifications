@@ -18,16 +18,20 @@ const path = require('path')
 const fs = require('fs')
 const _ = require('lodash')
 const AWS = require('aws-sdk');
+const { createServer, Server, Socket } = require('net')
+const split = require('split')
 
 module.exports = function(app) {
   var unsubscribes = []
   var plugin = {}
-  var deviceid
   var last_states = {}
+  var config
+  var server
+  var idSequence = 0
+  var pushSockets = []
   
   plugin.start = function(props) {
-    deviceid = props.deviceid
-
+    config = props
     var command = {
       context: "vessels.self",
       subscribe: [{
@@ -37,8 +41,8 @@ module.exports = function(app) {
     }
     
     app.subscriptionmanager.subscribe(command, unsubscribes, subscription_error, got_delta)
-    //devices = readJson(app, "devices" , plugin.id)
-    //send_push(app, devices[Object.keys(devices)[0]], "Hellow", "some.path")
+
+    start_local_server()
   };
 
   function subscription_error(err)
@@ -125,6 +129,11 @@ module.exports = function(app) {
   plugin.stop = function() {
     unsubscribes.forEach(function(func) { func() })
     unsubscribes = []
+    
+    if (server) {
+      server.close()
+      server = null
+    }
   }
   
   plugin.id = "push-notifications"
@@ -134,36 +143,19 @@ module.exports = function(app) {
   plugin.schema = {
     title: "Push Notifications",
     properties: {
-      /*
-      devices: {
-        type: "array",
-        title: " ",
-        items: {
-          title: "Registered Devices",
-          type: "object",
-          properties: {
-            "deviceName": {
-              title: "Device Name",
-              type: "string",
-            },
-            "accessKey": {
-              title: "Amazon SNS Access Key",
-              type: "string",
-            },
-            "secretAccessKey": {
-              title: "Amazon Secret Access Key",
-              type: "string",
-            },
-            "targetArn": {
-              title: "Target Amazon ARN",
-              type: "string",
-            },
-          }
-        }
+      enableRemotePush: {
+        title: 'Enable Remote Push',
+        description: 'Send notifications via the internet when available',
+        type: 'boolean',
+        default: true
+      },
+      localPushPort: {
+        title: 'Local Push Port',
+        description: 'Port on the server used for local push notifications',
+        type: 'number',
+        default: 3001
       }
-*/
     }
-    
   }
 
 
@@ -193,9 +185,18 @@ module.exports = function(app) {
           {
             last_states[value.path] = value.value.state
             app.debug("message: %s", value.value.message)
-            _.forIn(devices, function(device, arn) {
-              send_push(app, device, value.value.message, value.path, value.value.state)
-            })
+            if ( typeof config.enableRemotePush === 'undefined'
+                 || config.enableRemotePush )
+            {
+              _.forIn(devices, function(device, arn) {
+                if ( !deviceIsLocal(device) ) {
+                  send_push(app, device, value.value.message, value.path, value.value.state)
+                } else {
+                  app.debug("Skipping device %s because it's local", device.deviceName)
+                }
+              })
+            }
+            send_local_push(value.value.message, value.path, value.value.state)
           }
         }
         else if ( last_states[value.path] )
@@ -251,22 +252,20 @@ module.exports = function(app) {
                  });
   }
 
-  function send_push(app, device, message, path, state)
+  function get_apns(message, path, state)
   {
     if ( message.startsWith('Unknown Seatalk Alarm') ) {
       return
     }
 
-    var sns = new AWS.SNS({
-      region: "us-east-1",
-      accessKeyId: device.accessKey,
-      secretAccessKey: device.secretAccessKey
-    });
-
     message = `${state.charAt(0).toUpperCase() + state.slice(1)}: ${message}`
 
     aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default', 'content-available': 1 }, 'path': path, self: app.selfId }                           
 
+    let name = app.getSelfPath("name")
+    if ( name ) {
+      aps.aps.alert.title = name
+    }
 
     let category = (state === 'normal' ? "alarm_normal" : "alarm")
 
@@ -291,7 +290,24 @@ module.exports = function(app) {
     }
     
     aps["aps"]["category"] = category
+
+    return aps
+  }
+
+  function send_push(app, device, message, path, state)
+  {
+    var aps = get_apns(message, path, state)
     
+    if ( !aps ) {
+      return
+    }
+
+    var sns = new AWS.SNS({
+      region: "us-east-1",
+      accessKeyId: device.accessKey,
+      secretAccessKey: device.secretAccessKey
+    });
+
     var payload = {
       default: message,
       APNS: aps,
@@ -320,6 +336,108 @@ module.exports = function(app) {
       
       app.debug('push sent');
     });
+  }
+
+  function send_local_push(message, path, state)
+  {
+    var aps = get_apns(message, path, state)
+    if ( aps ) {
+      if ( aps.aps.alert.title ) {
+        aps.aps.alert.title = `${aps.aps.alert.title} (Local)`
+      }
+      pushSockets.forEach(socket => {
+        try {
+          socket.write(JSON.stringify(aps) + '\n')
+        } catch (err) {
+          app.error('error sending: ' + err)
+        }
+      })
+    }
+  }
+
+  function start_local_server()
+  {
+    const port = config.localPushPort || 3001
+    server = createServer((socket) => {
+      socket.id = idSequence++
+      socket.name = socket.remoteAddress + ':' + socket.remotePort
+      app.debug('Connected:' + socket.id + ' ' + socket.name)
+
+      socket.on('error', (err) => {
+        app.error(err + ' ' + socket.id + ' ' + socket.name)
+      })
+      socket.on('close', hadError => {
+        app.debug('Close:' + hadError + ' ' + socket.id + ' ' + socket.name)
+        let idx = pushSockets.indexOf(socket)
+        if ( idx != -1 ) {
+          pushSockets.splice(idx, 1)
+        }
+      })
+
+      socket
+        .pipe(
+          split((s) => {
+            if (s.length > 0) {
+              try {
+                return JSON.parse(s)
+              } catch (e) {
+                console.log(e.message)
+              }
+            }
+          })
+        )
+        .on('data', msg => {
+          if ( msg.heartbeat ) {
+            socket.write('{"heartbeat":true}')
+          } else if ( !msg.deviceName || !msg.deviceToken ) {
+            app.debug('invalid msg: %j', msg)
+            socket.end()
+          } else {
+            socket.device = msg
+            pushSockets.push(socket)
+            app.debug('registered device: %j', msg)
+          }
+        })
+        .on('error', (err) => {
+          app.error(err)
+        })
+      socket.on('end', () => {
+        app.debug('Ended:' + socket.id + ' ' + socket.name)
+      })
+
+      socket.write(JSON.stringify(app.getHello()) + '\n')
+      setTimeout(() => {
+        if ( !socket.device ) {
+          app.debug('closing socket, no registration received')
+          socket.end()
+        }
+      }, 5000)
+    })
+    
+    server.on('listening', () =>
+              app.debug('local push server listening on ' + port)
+             )
+    server.on('error', e => {
+      app.error(`local push server error: ${e.message}`)
+      app.setProviderError(`can't start local push server ${e.message}`)
+    })
+
+    if (process.env.TCPSTREAMADDRESS) {
+      app.debug('Binding to ' + process.env.TCPSTREAMADDRESS)
+      server.listen(port, process.env.TCPSTREAMADDRESS)
+    } else {
+      server.listen(port)
+    }
+  }
+
+  function deviceIsLocal(device) {
+    return pushSockets.find(socket => {
+      if ( device.deviceToken ) {
+        return socket.device.deviceToken == device.deviceToken
+      } else {
+        return socket.device.deviceName == device.deviceName
+      }
+    })
   }
 
   return plugin;

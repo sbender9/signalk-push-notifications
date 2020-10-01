@@ -17,7 +17,8 @@
   "dependencies": {
     "aws-sdk": "^2.632.0",
     "baconjs": "^0.7.88",
-    "lodash": "^4.17.4"
+    "lodash": "^4.17.4",
+    "split": "^1.0.1"
   },
   "repository": {
     "type": "git",
