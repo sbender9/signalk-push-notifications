@@ -145,9 +145,14 @@ module.exports = function(app) {
     properties: {
       enableRemotePush: {
         title: 'Enable Remote Push',
-        description: 'Send notifications via the internet when available',
+        description: 'Send push notifications via the internet when available',
         type: 'boolean',
         default: true
+      },
+      localPushSSIDs: {
+        title: 'Local Push SSIDs',
+        description: 'Comma separated list if Wi-Fi SSIDs where local push should be used',
+        type: 'string'
       },
       localPushPort: {
         title: 'Local Push Port',
