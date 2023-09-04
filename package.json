@@ -7,7 +7,8 @@
     "test": "$NODE $npm_package_main"
   },
   "keywords": [
-    "signalk-node-server-plugin"
+    "signalk-node-server-plugin",
+    "signalk-category-notifications"
   ],
   "author": {
     "name": "Scott Bender",
