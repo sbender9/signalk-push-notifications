@@ -171,7 +171,9 @@ module.exports = function(app) {
         res.send("Invalid Request")
       } else {
         stored.registeredPaths = paths
-        saveJson(app, "devices", plugin.id, devices, res)
+        saveJson(app, "devices", plugin.id, devices, res, () => {
+          setupSubscriptions()
+        })
       }
     })
 
@@ -397,7 +399,7 @@ module.exports = function(app) {
     return JSON.parse()
   }
 
-  function saveJson(app, name, id, json, res)
+  function saveJson(app, name, id, json, res, cb)
   {
     fs.writeFile(pathForPluginId(app, id, name), JSON.stringify(json, null, 2),
                  function(err) {
@@ -411,6 +413,9 @@ module.exports = function(app) {
                    else
                    {
                      res.send("Success\n")
+                     if (cb ) {
+                       cb()
+                     }
                    }
                  });
   }
