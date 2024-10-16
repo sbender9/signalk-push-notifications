@@ -240,10 +240,7 @@ module.exports = function(app) {
 
         if ( pathInfo && pathInfo.controls ) {
           Object.values(pathInfo.controls).forEach(control => {
-            controls.push({
-              token: control.token,
-              kind: control.kind
-            })
+            controls.push(control)
           })
         }
         if (controls.length > 0 || widgets.length > 0 ) {
@@ -272,17 +269,11 @@ module.exports = function(app) {
     
     Object.keys(registrations).forEach(targetArn => {
       let info = registrations[targetArn]
-      let controls = info.controls
 
-      if ( controls.length == 0 && deviceHasAnyControls(info.device) ) {
-        controls = [ { kind:"com.scottbender.Wilhelm.controls.SetSwitch"} ]
-      }
-      controls = controls.map(c => c.kind)
-      
-      app.debug(`sending controls: ${JSON.stringify(controls)} widgets: ${JSON.stringify(info.widgets)} to ${targetArn}`)
+      app.debug(`sending controls: ${JSON.stringify(info.controls)} widgets: ${JSON.stringify(info.widgets)} to ${targetArn}`)
 
       send_backgroup_push(app, info.device, vp.value, vp.value,
-                          controls, info.widgets)
+                          info.controls, info.widgets)
     })
 
     /*
@@ -566,7 +557,6 @@ module.exports = function(app) {
 
   function send_push(app, device, message, path, state)
   {
-    return //FIXME, remove
     var aps = get_apns(message, path, state)
     
     if ( !aps ) {
