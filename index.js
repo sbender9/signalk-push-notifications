@@ -163,13 +163,12 @@ module.exports = function(app) {
       let devices = readJson(app, "devices" , plugin.id)
       let stored = devices[targetArn]
 
-      app.debug(`register paths for ${targetArn} ${JSON.stringify(paths)}`)
-
       if ( !stored ) {
         app.debug(`unknown device ${targetArn}`)
         res.status(404)
         res.send("Invalid Request")
       } else {
+        app.debug(`register paths for ${stored.deviceName} ${JSON.stringify(paths)}`)
         stored.registeredPaths = paths
         saveJson(app, "devices", plugin.id, devices, res, () => {
           setupSubscriptions()
@@ -272,7 +271,7 @@ module.exports = function(app) {
 
       app.debug(`sending controls: ${JSON.stringify(info.controls)} widgets: ${JSON.stringify(info.widgets)} to ${targetArn}`)
 
-      send_backgroup_push(app, info.device, vp.value, vp.value,
+      send_backgroup_push(app, info.device, vp.path, vp.value,
                           info.controls, info.widgets)
     })
 
@@ -416,7 +415,7 @@ module.exports = function(app) {
     //var aps =   { "aps" : { "content-changed" : 1 } }
     var aps = {
       "aps": { "content-available": 1 },
-      "pathUpdate": "path",
+      "path": path,
       "value": true,
       controls,
       widgets
