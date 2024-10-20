@@ -1,7 +1,7 @@
 {
   "name": "signalk-push-notifications",
   "version": "2.0.0",
-  "description": "signalk-node-server plugin that pushes SignalK notifications to Amazon SNS",
+  "description": "signalk-node-server plugin that pushes SignalK notifications to WilhelmSK",
   "main": "index.js",
   "scripts": {
     "test": "$NODE $npm_package_main"
