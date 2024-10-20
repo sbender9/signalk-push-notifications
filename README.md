@@ -3,7 +3,7 @@
 [![Greenkeeper badge](https://badges.greenkeeper.io/sbender9/signalk-push-notifications.svg)](https://greenkeeper.io/)
 
 
-signalk-node-server plugin that pushes SignalK notifications to Amazon SNS
+signalk-node-server plugin that pushes SignalK notifications to WilhelmSK
 
-This only works with WilhelmSK. Enable push notifications in WilhelmSK in Settings -> Notifications.
+Enable push notifications in WilhelmSK in Settings -> Notifications.
 
