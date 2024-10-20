@@ -17,9 +17,11 @@ const Bacon = require('baconjs');
 const path = require('path')
 const fs = require('fs')
 const _ = require('lodash')
-const { SNS } = require('@aws-sdk/client-sns');
+const { InvokeCommand, LambdaClient, LogType } = require("@aws-sdk/client-lambda")
 const { createServer, Server, Socket } = require('net')
 const split = require('split')
+const request = require("request")
+const icon = require('./icon.js')
 
 module.exports = function(app) {
   var unsubscribes = []
@@ -30,8 +32,10 @@ module.exports = function(app) {
   var idSequence = 0
   var pushSockets = []
   var switchStates = {}
+  var decodedIcon
   
   plugin.start = function(props) {
+    decodedIcon = JSON.parse(Buffer.from(icon, 'base64').toString('utf8'))
     config = props
     setupSubscriptions()
     start_local_server()
@@ -76,6 +80,141 @@ module.exports = function(app) {
     handleNotificationDelta(app, plugin.id,
                             notification,
                             last_states)
+  }
+
+  plugin.signalKApiRoutes = (router) => {
+    router.post("/wsk/push/registerDevice", (req, res) => {
+
+      let device = req.body
+      if ( device.deviceToken == undefined
+           || device.deviceName == undefined
+           || device.production === undefined)
+      {
+        app.debug("invalid request: %O", device)
+        res.status(400)
+        res.send("Invalid Request")
+        return
+      }
+      
+      let devices = readJson(app, "devices" , plugin.id)
+      devices[device.deviceToken] = device
+      saveJson(app, "devices", plugin.id, devices, res)
+    })
+
+    router.post("/wsk/push/deviceEnabled", (req, res) => {
+
+      let device = req.body
+      if ( typeof device.deviceToken == 'undefined' )
+      {
+        app.debug("invalid request: %O", device)
+        res.status(400)
+        res.send("Invalid Request")
+        return
+      }
+
+      let key = device.targetArn || device.deviceToken
+
+      app.debug('checking enabled: %j', key)
+      
+      let devices = readJson(app, "devices" , plugin.id)
+      if ( devices[key] == null )
+      {
+        res.status(404)
+        res.send("Not registered")
+      }
+      else
+      {
+        res.send("Device is registered")
+      }
+    })
+
+    router.post("/wsk/push/unregisterDevice", (req, res) => {
+
+      let device = req.body
+      if ( device.deviceToken === undefined
+         && device.targetArn === undefined )
+      {
+        app.debug("invalid request:%O ", device)
+        res.status(400)
+        res.send("Invalid Request")
+        return
+      }
+
+      let key = device.targetArn || device.deviceToken
+
+      app.debug('unregister %j', key)
+      
+      devices = readJson(app, "devices" , plugin.id)
+      if ( devices[key] == null )
+      {
+        res.status(404)
+        res.send("Not registered")
+      }
+      else
+      {
+        delete devices[key]
+        saveJson(app, "devices", plugin.id, devices, res)
+      }
+    })
+
+    router.post("/wsk/push/registerNotificationPaths", (req, res) => {
+      
+      let deviceToken = req.body.deviceToken
+      let paths = req.body.paths
+      if ( deviceToken ===  undefined
+           || paths === undefined
+         )
+      {
+        app.debug("invalid request: %O", req.body)
+        res.status(400)
+        res.send("Invalid Request")
+        return
+      }
+
+      app.debug('register paths for %j', deviceToken)
+      
+      let devices = readJson(app, "devices" , plugin.id)
+      let device = devices[deviceToken]
+
+      if ( !device ) {
+        app.debug(`unknown device ${deviceToken}`)
+        res.status(404)
+        res.send("Invalid Request")
+      } else {
+        app.debug(`register paths for ${device.deviceName} ${JSON.stringify(paths)}`)
+        if ( device.registeredPaths === undefined ) {
+          device.registeredPaths = {}
+        }
+        
+        Object.keys(paths).forEach(path => {
+          if ( device.registeredPaths[path] === undefined ) {
+            device.registeredPaths[path] = {}
+          }
+          device.registeredPaths[path].widgets = paths[path].widgets
+
+          if ( device.registeredPaths[path].controls === undefined ) {
+            device.registeredPaths[path].controls = []
+          }
+
+          let currentControls = device.registeredPaths[path].controls
+          let inputC = paths[path].controls || []
+          inputC.forEach(control => {
+            let exists = currentControls.find(c => {
+              return c.token == control.token
+            })
+            if ( !exists ) {
+              currentControls.push(control)
+            }
+          })
+        })
+        
+        saveJson(app, "devices", plugin.id, devices, res, () => {
+          setupSubscriptions()
+        })
+      }
+    })
+    
+    return router
   }
 
   plugin.registerWithRouter = function(router) {
@@ -145,43 +284,6 @@ module.exports = function(app) {
         saveJson(app, "devices", plugin.id, devices, res)
       }
     })
-
-    router.post("/registerNotificationPaths", (req, res) => {
-      
-      let targetArn = req.body.targetArn
-      let paths = req.body.paths
-      if ( targetArn ===  undefined
-           || paths === undefined
-         )
-      {
-        app.debug("invalid request: %O", req.body)
-        res.status(400)
-        res.send("Invalid Request")
-        return
-      }
-      
-      let devices = readJson(app, "devices" , plugin.id)
-      let stored = devices[targetArn]
-
-      if ( !stored ) {
-        app.debug(`unknown device ${targetArn}`)
-        res.status(404)
-        res.send("Invalid Request")
-      } else {
-        app.debug(`register paths for ${stored.deviceName} ${JSON.stringify(paths)}`)
-        stored.registeredPaths = paths
-        saveJson(app, "devices", plugin.id, devices, res, () => {
-          setupSubscriptions()
-        })
-      }
-    })
-
-    router.get("/fake", (req, res) => {
-      _.forIn(devices, function(device, arn) {
-        send_control_push(app, device)
-      })
-      res.send("FAKE!")
-      })
   }
   
   plugin.stop = function() {
@@ -196,7 +298,7 @@ module.exports = function(app) {
   
   plugin.id = "push-notifications"
   plugin.name = "Push Notifications"
-  plugin.description = "Plugin that pushes SignalK notifications to Amazon SNS"
+  plugin.description = "Plugin that pushes SignalK notifications to WilhelmSK"
 
   plugin.schema = {
     title: "Push Notifications",
@@ -243,7 +345,7 @@ module.exports = function(app) {
           })
         }
         if (controls.length > 0 || widgets.length > 0 ) {
-          res[device.targetArn] = { device, controls, widgets }
+          res[device.deviceToken] = { device, controls, widgets }
         }
       }
     })
@@ -266,37 +368,47 @@ module.exports = function(app) {
 
     app.debug(`control changed ${vp.path} = ${vp.value}`)
     
-    Object.keys(registrations).forEach(targetArn => {
-      let info = registrations[targetArn]
+    Object.keys(registrations).forEach(deviceToken => {
+      let info = registrations[deviceToken]
 
-      app.debug(`sending controls: ${JSON.stringify(info.controls)} widgets: ${JSON.stringify(info.widgets)} to ${targetArn}`)
+      app.debug(`sending controls: ${JSON.stringify(info.controls)} widgets: ${JSON.stringify(info.widgets)} to ${deviceToken}`)
 
-      send_backgroup_push(app, info.device, vp.path, vp.value,
-                          info.controls, info.widgets)
-    })
-
-    /*
-
-    controls.forEach(info => {
-      let isSandbox = info.targetArn.indexOf('APNS_SANDBOX')
-      let path = `/3/device/${info.deviceToken}`
-      let headers = {
-        //':method': 'POST',
-        //':path': path,
-        authorization: `bearer ${info.token}`,
-        "apns-push-type": 'controls',
-        "apns-expiration": 0,
-        "apns-priority": 10,
-        "apns-topic": 'com.scottbender.Wilhelm.push-type.controls',
+      if (info.widgets && info.widgets.length > 0 ) {
+        send_background_push(app, [info.device], vp.path, vp.value,
+                             info.widgets)
       }
-      let post = { aps : { "content-changed" : true } }
-      app.debug(JSON.stringify(headers, 0, 2))
+      if ( info.controls && info.controls.length > 0 ) {
+        send_control_push(app, info.device, info.controls)
+      }
+    })
+  }
 
-      let host = isSandbox ? 'api.development.push.apple.com' : 'api.push.apple.com'
-      let url = `https://${host}${path}`
-      app.debug(`url: ${url}`)
+  function send_control_push(app, device, controls) {
+
+    let isProd = device.targetArn !== undefined 
+          ? device.targetArn.indexOf('APNS_SANDBOX') == -1
+          : device.production
+
+    //app.debug('controls: ' + JSON.stringify(controls, 0, 2))
+
+    let body = {
+      production: isProd,
+      tokens: controls.filter(control =>  control.token !== undefined)
+        .map(control => control.token )
+    }
+
+    if ( body.tokens.length > 0 ) {
+      app.debug('sending controls push body: %j', body)
       
-    })*/
+      invokeLambda('sendControlUpdate', body)
+        .then(response => {
+          app.debug(response.logs)
+          app.debug(response.result)
+        })
+        .catch(err => {
+          app.error(err)
+        })
+    }
   }
 
   function handleNotificationDelta(app, id, notification, last_states)
@@ -334,13 +446,16 @@ module.exports = function(app) {
               if ( typeof config.enableRemotePush === 'undefined'
                    || config.enableRemotePush )
               {
+                let push_devices = []
                 _.forIn(devices, function(device, arn) {
                   if ( !deviceIsLocal(device) ) {
-                    send_push(app, device, value.value.message, value.path, value.value.state)
+                    //send_push(app, device, value.value.message, value.path, value.value.state)
+                    push_devices.push(device)
                   } else {
                     app.debug("Skipping device %s because it's local", device.deviceName)
                   }
                 })
+                send_push(app, push_devices, value.value.message, value.path, value.value.state)
               }
               send_local_push(value.value.message, value.path, value.value.state)
             }
@@ -410,106 +525,40 @@ module.exports = function(app) {
                  });
   }
 
-  function send_backgroup_push(app, device, path, value, controls, widgets)
+  function send_background_push(app, devices, path, value, widgets)
   {
-    //var aps =   { "aps" : { "content-changed" : 1 } }
     var aps = {
       "aps": { "content-available": 1 },
       "path": path,
       "value": true,
-      controls,
+      controls: [],
       widgets
     }
 
-    var sns = new SNS({
-      region: "us-east-1",
-
-      credentials: {
-        accessKeyId: device.accessKey,
-        secretAccessKey: device.secretAccessKey
+    let tokens = devices.map(device => {
+      return {
+        token: device.deviceToken,
+        production: device.targetArn !== undefined 
+          ? device.targetArn.indexOf('APNS_SANDBOX') == -1
+          : device.production
       }
-    });
+    })
 
-    var payload = {
-      default: "path changed",
-      APNS: aps,
-      APNS_SANDBOX: aps
-    };
-
-    // first have to stringify the inner APNS object...
-    payload.APNS = JSON.stringify(payload.APNS);
-    payload.APNS_SANDBOX = JSON.stringify(payload.APNS_SANDBOX);
-
-    app.debug('sending background push to ' + device.targetArn + "payload: " + JSON.stringify(payload, null, 2));
+    app.debug('sending background push to tokens %j : %j', tokens, aps)
     
-    // then have to stringify the entire message payload
-    payload = JSON.stringify(payload);
-    
-    sns.publish({
-      Message: payload,
-      MessageStructure: 'json',
-      MessageAttributes: {
-        "AWS.SNS.MOBILE.APNS.PUSH_TYPE": {"DataType":"String","StringValue":"background"},
-        "AWS.SNS.MOBILE.APNS.PRIORITY":{"DataType":"String","StringValue":"10"},
-        "AWS.SNS.MOBILE.APNS.TOPIC":{"DataType":"String","StringValue":"com.scottbender.Wilhelm"}
-      },
-      TargetArn: device.targetArn
-    }, function(err, data) {
-      if (err) {
-        console.log(err.stack);
-        return;
-      }
-      
-      app.debug('push sent');
-    });
-  }
-
-
-  function send_control_push(app, device)
-  {
-    var aps =   { "aps" : { "content-changed" : 1 } }
-
-    var sns = new SNS({
-      region: "us-east-1",
-
-      credentials: {
-        accessKeyId: device.accessKey,
-        secretAccessKey: device.secretAccessKey
-      }
-    });
-
-    var payload = {
-      default: "control changed",
-      APNS: aps,
-      APNS_SANDBOX: aps
-    };
-
-    // first have to stringify the inner APNS object...
-    payload.APNS = JSON.stringify(payload.APNS);
-    payload.APNS_SANDBOX = JSON.stringify(payload.APNS_SANDBOX);
-
-    app.debug('sending push to ' + device.targetArn + "payload: " + JSON.stringify(payload, null, 2));
-    
-    // then have to stringify the entire message payload
-    payload = JSON.stringify(payload);
-    
-    sns.publish({
-      Message: payload,
-      MessageStructure: 'json',
-      MessageAttributes: {
-        "AWS.SNS.MOBILE.APNS.PUSH_TYPE": {"DataType":"String","StringValue":"controls"},
-        "AWS.SNS.MOBILE.APNS.PRIORITY":{"DataType":"String","StringValue":"10"},
-        "AWS.SNS.MOBILE.APNS.TOPIC":{"DataType":"String","StringValue":"com.scottbender.Wilhelm.push-type.controls"}
-      },
-      TargetArn: device.targetArn
-    }, function(err, data) {
-      if (err) {
-        console.log(err.stack);
-        return;
-      }
-      
-      app.debug('push sent');
-    });
+    invokeLambda('sendAlertPush', {
+      type: 'background',
+      tokens,
+      aps,
+      test: false
+    })
+    .then(response => {
+        app.debug(response.logs)
+        app.debug(response.result)
+      })
+      .catch(err => {
+        app.error(err)
+      })
   }
 
   function get_apns(message, path, state)
@@ -554,7 +603,7 @@ module.exports = function(app) {
     return aps
   }
 
-  function send_push(app, device, message, path, state)
+  function send_push(app, devices, message, path, state)
   {
     var aps = get_apns(message, path, state)
     
@@ -562,43 +611,30 @@ module.exports = function(app) {
       return
     }
 
-    var sns = new SNS({
-      region: "us-east-1",
-
-      credentials: {
-        accessKeyId: device.accessKey,
-        secretAccessKey: device.secretAccessKey
+    let tokens = devices.map(device => {
+      return {
+        token: device.deviceToken,
+        production: device.targetArn !== undefined 
+          ? device.targetArn.indexOf('APNS_SANDBOX') == -1
+          : device.production
       }
-    });
+    })
 
-    var payload = {
-      default: message,
-      APNS: aps,
-      APNS_SANDBOX: aps
-    };
-
-    // first have to stringify the inner APNS object...
-    payload.APNS = JSON.stringify(payload.APNS);
-    payload.APNS_SANDBOX = JSON.stringify(payload.APNS_SANDBOX);
-
-    app.debug('sending push to ' + device.targetArn + "payload: " + JSON.stringify(payload, null, 2));
+    app.debug('sending alert to tokens %j : %j', tokens, aps)
     
-    // then have to stringify the entire message payload
-    payload = JSON.stringify(payload);
-
-    
-    sns.publish({
-      Message: payload,
-      MessageStructure: 'json',
-      TargetArn: device.targetArn
-    }, function(err, data) {
-      if (err) {
-        console.log(err.stack);
-        return;
-      }
-      
-      app.debug('push sent');
-    });
+    invokeLambda('sendAlertPush', {
+      type: 'alert',
+      tokens,
+      aps,
+      test: false
+    })
+    .then(response => {
+        app.debug(response.logs)
+        app.debug(response.result)
+      })
+      .catch(err => {
+        app.error(err)
+      })
   }
 
   function send_local_push(message, path, state)
@@ -617,7 +653,7 @@ module.exports = function(app) {
       })
     }
   }
-
+  
   function start_local_server()
   {
     const port = config.localPushPort || 3001
@@ -703,6 +739,21 @@ module.exports = function(app) {
     })
   }
 
+  async function invokeLambda(functionName, payload) {
+    const client = new LambdaClient(decodedIcon);
+    const command = new InvokeCommand({
+      FunctionName: functionName,
+      Payload: JSON.stringify(payload),
+      LogType: LogType.Tail,
+    });
+    
+    const { Payload, LogResult } = await client.send(command);
+    const result = Buffer.from(Payload).toString();
+    const logs = Buffer.from(LogResult, "base64").toString();
+    return { logs, result };
+  }
+
   return plugin;
 }
+
 

@@ -16,10 +16,12 @@
   },
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-lambda": "^3.670.0",
     "@aws-sdk/client-s3": "^3.651.1",
     "@aws-sdk/client-sns": "^3.651.1",
     "baconjs": "^0.7.88",
     "lodash": "^4.17.4",
+    "request": "^2.88.2",
     "split": "^1.0.1"
   },
   "repository": {

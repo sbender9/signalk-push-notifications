@@ -1,3 +1,8 @@
+decodeIcon.js
+encodeCreds.js
+test_lambda.js
+signalk-push-notifications*.tgz
+
 # Logs
 logs
 *.log
