@@ -1,6 +1,6 @@
 {
   "name": "signalk-push-notifications",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "signalk-node-server plugin that pushes SignalK notifications to WilhelmSK",
   "main": "index.js",
   "scripts": {
