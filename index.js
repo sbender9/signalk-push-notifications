@@ -378,12 +378,12 @@ module.exports = function(app) {
                              info.widgets)
       }
       if ( info.controls && info.controls.length > 0 ) {
-        send_control_push(app, info.device, info.controls)
+        send_control_push(app, info.device, info.controls, vp.path)
       }
     })
   }
 
-  function send_control_push(app, device, controls) {
+  function send_control_push(app, device, controls, path) {
 
     let isProd = device.targetArn !== undefined 
           ? device.targetArn.indexOf('APNS_SANDBOX') == -1
@@ -404,11 +404,37 @@ module.exports = function(app) {
         .then(response => {
           app.debug(response.logs)
           app.debug(response.result)
+          let result = JSON.parse(response.result)
+          if ( result.body && result.body.failed && result.body.failed.length > 0 ) {
+            removeBadTokens(app, device, path, result.body.failed)
+          }
         })
         .catch(err => {
           app.error(err)
         })
     }
+  }
+
+  function removeBadTokens(app, device, path, failed) {
+    let devices = readJson(app, "devices" , plugin.id)
+    failed.forEach( res => {
+      if ( res.device && res.response ) {
+        let token = res.device
+        let reason = res.response.reason
+        if ( reason === "BadDeviceToken" ) {
+          app.debug('removing bad device token %s %s', path, token)
+
+          let dev = device.targetArn ? devices[device.targetArn] : devices[device.deviceToken]
+          let pathInfo = dev.registeredPaths[path]
+          if ( pathInfo && pathInfo.controls ) {
+            pathInfo.controls = pathInfo.controls.filter( info => {
+              info.token != token
+            })
+          }
+        }
+      }
+    })
+    saveJson(app, "devices", plugin.id, devices)
   }
 
   function handleNotificationDelta(app, id, notification, last_states)
@@ -511,13 +537,17 @@ module.exports = function(app) {
                    if (err) {
                      app.debug(err.stack)
                      app.error(err)
-                     res.status(500)
-                     res.send(err)
+                     if ( res ) {
+                       res.status(500)
+                       res.send(err)
+                     }
                      return
                    }
                    else
                    {
-                     res.send("Success\n")
+                     if ( res ) {
+                       res.send("Success\n")
+                     }
                      if (cb ) {
                        cb()
                      }
