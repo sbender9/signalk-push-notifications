@@ -191,7 +191,9 @@ module.exports = function(app) {
             device.registeredPaths[path] = {}
           }
           device.registeredPaths[path].widgets = paths[path].widgets
+          device.registeredPaths[path].controls = paths[path].controls
 
+          /*
           if ( device.registeredPaths[path].controls === undefined ) {
             device.registeredPaths[path].controls = []
           }
@@ -205,7 +207,7 @@ module.exports = function(app) {
             if ( !exists ) {
               currentControls.push(control)
             }
-          })
+          })*/
         })
         
         saveJson(app, "devices", plugin.id, devices, res, () => {
@@ -323,6 +325,24 @@ module.exports = function(app) {
     }
   }
 
+  function findAnyToken(device) {
+    let paths = device.registeredPaths
+    let token
+    if (  paths ) {
+      Object.keys(paths).forEach(path => {
+        if ( paths[path].controls ) {
+          let t = paths[path].controls.find(c => {
+            return c.token !== "unknown"
+          })
+          if ( t !== undefined ) {
+            token = t
+          }
+        }
+      })
+    }
+    return token
+  }
+
   function findRegistrations(path) {
     let res = {}
     let devices = readJson(app, "devices" , plugin.id)
@@ -341,8 +361,16 @@ module.exports = function(app) {
 
         if ( pathInfo && pathInfo.controls ) {
           Object.values(pathInfo.controls).forEach(control => {
-            controls.push(control)
+            if ( control.token !== "unknown" ) {
+              controls.push(control)
+            }
           })
+          if ( pathInfo.controls.length > 0 && controls.length == 0 ) {
+            let any = findAnyToken(device)
+            if ( any ) {
+              controls.push(any)
+            }
+          }
         }
         if (controls.length > 0 || widgets.length > 0 ) {
           res[device.deviceToken] = { device, controls, widgets }
@@ -422,7 +450,7 @@ module.exports = function(app) {
         let token = res.device
         let reason = res.response.reason
         if ( reason === "BadDeviceToken" ) {
-          app.debug('removing bad device token %s %s', path, token)
+          app.debug('removing bad device token %s %s %s', device.deviceName, path, token)
 
           let dev = device.targetArn ? devices[device.targetArn] : devices[device.deviceToken]
           let pathInfo = dev.registeredPaths[path]
