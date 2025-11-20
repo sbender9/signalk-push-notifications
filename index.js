@@ -321,6 +321,21 @@ module.exports = function(app) {
         description: 'Port on the server used for local push notifications',
         type: 'number',
         default: 3001
+      },
+      emergencyCritical: {
+        title: 'Make Emergeny Critical',
+        description: 'Send notifications with the emergency state as Crtical iOS Notifications',
+        type: 'boolean',
+        default: true
+      },
+      criticalNotifications: {
+        title: 'Critical Notifications',
+        description: 'These notifications will be sent as Critical iOS Notifications',
+        type: 'array',
+        items: {
+          type: 'string',
+          default: 'notifications.navigation.anchor'
+        }
       }
     }
   }
@@ -627,11 +642,18 @@ module.exports = function(app) {
 
     message = `${state.charAt(0).toUpperCase() + state.slice(1)}: ${message}`
 
-    aps =  { 'aps': { 'alert': {'body': message}, 'sound': 'default', 'content-available': 1 }, 'path': path, self: app.selfId }                           
+    const content = {
+      aps: {
+        alert: { body: message },
+        'content-available': 1
+      },
+      path: path,
+      self: app.selfId
+    }                           
 
     let name = app.getSelfPath("name")
     if ( name ) {
-      aps.aps.alert.title = name
+      content.aps.alert.title = name
     }
 
     let category = (state === 'normal' ? "alarm_normal" : "alarm")
@@ -656,9 +678,22 @@ module.exports = function(app) {
       return
     }
     
-    aps["aps"]["category"] = category
+    content.aps.category = category
 
-    return aps
+    if (((config.emergencyCritical === undefined ||
+      config.emergencyCritical) && state === 'emergency') ||
+      (config.criticalNotifications && config.criticalNotifications.indexOf(path) !== -1)) {
+      content.aps.sound = {
+        critical: 1, 
+        name: 'default',
+        volume: 1.0 
+      }
+      content['interruption-level'] = 'critical'
+    } else {
+      content.aps.sound = 'default'
+    }
+
+    return content
   }
 
   function send_push(app, devices, message, path, state)
