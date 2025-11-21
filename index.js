@@ -328,6 +328,18 @@ module.exports = function(app) {
         type: 'boolean',
         default: true
       },
+      alarmCritical: {
+        title: 'Make Alarm Critical',
+        description: 'Send notifications with the alarm state as Critical iOS Notifications',
+        type: 'boolean',
+        default: false
+      },
+      criticalVolume: {
+        title: 'Critical Notification Volume',
+        description: 'Volume for critical notifications (0 to 100)',
+        type: 'number',
+        default: 100
+      },
       criticalNotifications: {
         title: 'Critical Notifications',
         description: 'These notifications will be sent as Critical iOS Notifications',
@@ -682,11 +694,13 @@ module.exports = function(app) {
 
     if (((config.emergencyCritical === undefined ||
       config.emergencyCritical) && state === 'emergency') ||
+      (config.alarmCritical !== undefined && config.alarmCritical && state === 'alarm') ||
       (config.criticalNotifications && config.criticalNotifications.indexOf(path) !== -1)) {
+      const volume = Math.min(Math.max(parseInt(config.criticalVolume) || 100, 0), 100) / 100.0
       content.aps.sound = {
-        critical: 1, 
+        critical: 1,
         name: 'default',
-        volume: 1.0 
+        volume: volume
       }
       content['interruption-level'] = 'critical'
     } else {
