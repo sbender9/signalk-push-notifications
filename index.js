@@ -21,7 +21,7 @@ const { InvokeCommand, LambdaClient, LogType } = require("@aws-sdk/client-lambda
 const { createServer, Server, Socket } = require('net')
 const split = require('split')
 const request = require("request")
-const icon = require('./icon.js')
+const icon = require('./icon.js');
 
 module.exports = function(app) {
   var unsubscribes = []
@@ -33,6 +33,7 @@ module.exports = function(app) {
   var pushSockets = []
   var switchStates = {}
   var decodedIcon
+  var repeatingNotifications = {}
   
   plugin.start = function(props) {
     decodedIcon = JSON.parse(Buffer.from(icon, 'base64').toString('utf8'))
@@ -340,6 +341,18 @@ module.exports = function(app) {
         type: 'number',
         default: 100
       },
+      criticalRepeat: {
+        title: 'Critical Notification Repeat',
+        description: 'Repeat critical notifications every X seconds, 0 to disable repeat',
+        type: 'number',
+        default: 0
+      },
+      criticalRepeatDuration: {
+        title: 'Critical Notification Repeat Duration',
+        description: 'Repeat critical notifications duration (minutes), 0 to repeat until cleared',
+        type: 'number',
+        default: 0
+      },
       criticalNotifications: {
         title: 'Critical Notifications',
         description: 'These notifications will be sent as Critical iOS Notifications',
@@ -518,16 +531,16 @@ module.exports = function(app) {
                && value.value.message != null )
           {
             if ( (last_states[value.path] == null
-                  && value.value.state != 'normal')
+                  && (value.value.state != 'normal' && value.value.state != 'nominal') )
                  || ( last_states[value.path] != null
                       && last_states[value.path] != value.value.state) )
             {
               last_states[value.path] = value.value.state
               app.debug("message: %s", value.value.message)
+              let push_devices = []
               if ( typeof config.enableRemotePush === 'undefined'
                    || config.enableRemotePush )
               {
-                let push_devices = []
                 _.forIn(devices, function(device, arn) {
                   if ( !deviceIsLocal(device) ) {
                     //send_push(app, device, value.value.message, value.path, value.value.state)
@@ -539,6 +552,14 @@ module.exports = function(app) {
                 send_push(app, push_devices, value.value.message, value.path, value.value.state)
               }
               send_local_push(value.value.message, value.path, value.value.state)
+              if ( config.criticalRepeat !== undefined && config.criticalRepeat > 0
+                   && isCriticalNotification( value.path, value.value.state) )
+              {
+                start_critical_repeat_notification(push_devices, value)
+              } else if ( repeatingNotifications[value.path] ) {
+                clearInterval(repeatingNotifications[value.path])
+                delete repeatingNotifications[value.path] 
+              }
             }
           }
           else if ( last_states[value.path] )
@@ -556,6 +577,29 @@ module.exports = function(app) {
         }
       })
     })
+  }
+
+  function start_critical_repeat_notification(devices, value) {
+    let repeatKey = value.path
+    if (repeatingNotifications[repeatKey] === undefined) {
+      let duration = config.criticalRepeatDuration || 0
+      let startTime = Date.now()
+
+      let interval = setInterval(() => {
+        let now = Date.now()
+        if (duration > 0
+          && (now - startTime) > (duration * 60 * 1000)) {
+          clearInterval(repeatingNotifications[repeatKey])
+          delete repeatingNotifications[repeatKey]
+        } else {
+          app.debug('repeating critical notification %s', repeatKey)
+          send_push(app, devices, value.value.message, value.path, value.value.state)
+          send_local_push(value.value.message, value.path, value.value.state)
+        }
+      }, config.criticalRepeat * 1000)
+      
+      repeatingNotifications[repeatKey] = interval
+    }
   }
 
   function pathForPluginId(app, id, name) {
@@ -646,6 +690,14 @@ module.exports = function(app) {
       })
   }
 
+  function isCriticalNotification(path, state) {
+    const isEmergency = ((config.emergencyCritical === undefined ||
+      config.emergencyCritical) && state === 'emergency') 
+    const isAlarm = (config.alarmCritical !== undefined && config.alarmCritical && state === 'alarm') 
+    const isCritical = (config.criticalNotifications && config.criticalNotifications.indexOf(path) !== -1)
+    return isEmergency || isAlarm || isCritical
+  }
+
   function get_apns(message, path, state)
   {
     if ( message.startsWith('Unknown Seatalk Alarm') ) {
@@ -692,10 +744,7 @@ module.exports = function(app) {
     
     content.aps.category = category
 
-    if (((config.emergencyCritical === undefined ||
-      config.emergencyCritical) && state === 'emergency') ||
-      (config.alarmCritical !== undefined && config.alarmCritical && state === 'alarm') ||
-      (config.criticalNotifications && config.criticalNotifications.indexOf(path) !== -1)) {
+    if (isCriticalNotification(path, state)) {
       const volume = Math.min(Math.max(parseInt(config.criticalVolume) || 100, 0), 100) / 100.0
       content.aps.sound = {
         critical: 1,
