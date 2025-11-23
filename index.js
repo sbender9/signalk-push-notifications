@@ -763,8 +763,6 @@ module.exports = function(app) {
 
   function send_push(app, devices, message, path, state)
   {
-    return
-
     var aps = get_apns(message, path, state)
     
     if ( !aps ) {
