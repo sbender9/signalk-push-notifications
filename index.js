@@ -543,7 +543,6 @@ module.exports = function(app) {
               {
                 _.forIn(devices, function(device, arn) {
                   if ( !deviceIsLocal(device) ) {
-                    //send_push(app, device, value.value.message, value.path, value.value.state)
                     push_devices.push(device)
                   } else {
                     app.debug("Skipping device %s because it's local", device.deviceName)
@@ -560,6 +559,9 @@ module.exports = function(app) {
                 clearInterval(repeatingNotifications[value.path])
                 delete repeatingNotifications[value.path] 
               }
+            } else if (last_states[value.path] && repeatingNotifications[value.path] && value.value.method.indexOf('sound') === -1) {
+              clearInterval(repeatingNotifications[value.path])
+              delete repeatingNotifications[value.path]
             }
           }
           else if ( last_states[value.path] )
@@ -761,6 +763,8 @@ module.exports = function(app) {
 
   function send_push(app, devices, message, path, state)
   {
+    return
+
     var aps = get_apns(message, path, state)
     
     if ( !aps ) {
