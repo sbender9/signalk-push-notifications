@@ -349,7 +349,7 @@ module.exports = function(app) {
       },
       criticalRepeatDuration: {
         title: 'Critical Notification Repeat Duration',
-        description: 'Repeat critical notifications duration (minutes), 0 to repeat until cleared',
+        description: 'Repeat critical notifications duration (minutes), 0 to repeat until cleared, max 3 minutes',
         type: 'number',
         default: 0
       },
@@ -586,6 +586,10 @@ module.exports = function(app) {
     if (repeatingNotifications[repeatKey] === undefined) {
       let duration = config.criticalRepeatDuration || 0
       let startTime = Date.now()
+
+      if ( duration > 3 ) {
+        duration = 3
+      }
 
       let interval = setInterval(() => {
         let now = Date.now()
