@@ -22,6 +22,7 @@ const { createServer, Server, Socket } = require('net')
 const split = require('split')
 const request = require("request")
 const icon = require('./icon.js');
+const { clear } = require('console');
 
 module.exports = function(app) {
   var unsubscribes = []
@@ -535,6 +536,7 @@ module.exports = function(app) {
                  || ( last_states[value.path] != null
                       && last_states[value.path] != value.value.state) )
             {
+              const lastState = last_states[value.path]
               last_states[value.path] = value.value.state
               app.debug("message: %s", value.value.message)
               let push_devices = []
@@ -548,9 +550,9 @@ module.exports = function(app) {
                     app.debug("Skipping device %s because it's local", device.deviceName)
                   }
                 })
-                send_push(app, push_devices, value.value.message, value.path, value.value.state)
+                send_push(app, push_devices, value.value.message, value.path, value.value.state, value.value, lastState)
               }
-              send_local_push(value.value.message, value.path, value.value.state)
+              send_local_push(value.value.message, value.path, value.value.state, value.value, lastState)
               if ( config.criticalRepeat !== undefined && config.criticalRepeat > 0
                    && isCriticalNotification( value.path, value.value.state) )
               {
@@ -599,8 +601,8 @@ module.exports = function(app) {
           delete repeatingNotifications[repeatKey]
         } else {
           app.debug('repeating critical notification %s', repeatKey)
-          send_push(app, devices, value.value.message, value.path, value.value.state)
-          send_local_push(value.value.message, value.path, value.value.state)
+          send_push(app, devices, value.value.message, value.path, value.value.state, value.value, undefined)
+          send_local_push(value.value.message, value.path, value.value.state, value.value, undefined)
         }
       }, config.criticalRepeat * 1000)
       
@@ -704,7 +706,7 @@ module.exports = function(app) {
     return isEmergency || isAlarm || isCritical
   }
 
-  function get_apns(message, path, state)
+  function get_apns(message, path, state, lastState)
   {
     if ( message.startsWith('Unknown Seatalk Alarm') ) {
       return
@@ -750,7 +752,7 @@ module.exports = function(app) {
     
     content.aps.category = category
 
-    if (isCriticalNotification(path, state)) {
+    if (isCriticalNotification(path, state) || ((state === 'normal' || state === 'nominal') && lastState && isCriticalNotification(path, lastState))) {
       const volume = Math.min(Math.max(parseInt(config.criticalVolume) || 100, 0), 100) / 100.0
       content.aps.sound = {
         critical: 1,
@@ -765,9 +767,9 @@ module.exports = function(app) {
     return content
   }
 
-  function send_push(app, devices, message, path, state)
+  function send_push(app, devices, message, path, state, value, lastState)
   {
-    var aps = get_apns(message, path, state)
+    var aps = get_apns(message, path, state, lastState)
     
     if ( !aps ) {
       return
@@ -783,12 +785,14 @@ module.exports = function(app) {
     })
 
     app.debug('sending alert to tokens %j : %j', tokens, aps)
-    
+
     invokeLambda('sendAlertPush', {
       type: 'alert',
       tokens,
       aps,
-      test: false
+      test: false,
+      id: value.id,
+      clear: (state === 'normal' || state === 'nominal') && lastState && isCriticalNotification(path, lastState)
     })
     .then(response => {
         app.debug(response.logs)
@@ -799,10 +803,11 @@ module.exports = function(app) {
       })
   }
 
-  function send_local_push(message, path, state)
+  function send_local_push(message, path, state, value, lastState)
   {
-    var aps = get_apns(message, path, state)
+    var aps = get_apns(message, path, state, lastState)
     if ( aps ) {
+      aps.id = value.id
       if ( aps.aps.alert.title ) {
         aps.aps.alert.title = `${aps.aps.alert.title} (Local)`
       }
