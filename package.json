@@ -2,9 +2,16 @@
   "name": "signalk-push-notifications",
   "version": "2.4.0",
   "description": "signalk-node-server plugin that pushes SignalK notifications to WilhelmSK",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
-    "test": "$NODE $npm_package_main"
+    "test": "$NODE $npm_package_main",
+    "prettier": "prettier --write .",
+    "lint": "eslint --fix --format compact .",
+    "ci-lint": "eslint && prettier --check .",
+    "ci-test": "npm run build && npm run test && npm run ci-lint",
+    "format": "npm run prettier && npm run lint",
+    "build": "tsc",
+    "watch": "npm run build -- -w"
   },
   "keywords": [
     "signalk-node-server-plugin",
@@ -27,5 +34,20 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/sbender9/signalk-push-notifications"
+  },
+  "devDependencies": {
+    "@signalk/server-api": "^2.7.2",
+    "@tsconfig/node20": "^20.1.6",
+    "@types/express": "^5.0.6",
+    "@types/lodash": "^4.17.12",
+    "@types/node": "^24.0.4",
+    "@types/request": "^2.48.12",
+    "@types/split": "^1.0.5",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-formatter-compact": "^8.40.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.40.0"
   }
 }
