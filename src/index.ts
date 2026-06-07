@@ -130,8 +130,8 @@ interface APSContent {
 
 // Anchor Live Activity lifecycle paths (from signalk-anchoralarm-plugin).
 //   anchoring.started -> 'alert'  : anchor dropped, rode deploying   -> START
-//   anchoring.ended   -> 'alert'  : radius locked, anchoring complete -> UPDATE (set)
-//   anchoring.ended   -> 'normal' : anchor raised                     -> END
+//   anchoring.ended   -> 'alert'  : radius locked, anchoring complete -> END (final set)
+//   anchoring.ended   -> 'normal' : anchor raised before set          -> END
 //   navigation.anchor  alarm/emergency : boat dragging               -> UPDATE (dragging)
 const ANCHORING_STARTED = 'notifications.navigation.anchoring.started'
 const ANCHORING_ENDED = 'notifications.navigation.anchoring.ended'
@@ -1316,9 +1316,12 @@ const start = (app: ServerAPI): Plugin => {
         } else if (vp.path === ANCHORING_ENDED) {
           const state = notificationState(vp.value)
           if (state === 'alert') {
-            // Radius locked: anchoring complete, now monitoring for drag.
+            // Radius locked: deployment complete. End the Live Activity here
+            // (with a final "set" state) rather than stream updates for the
+            // whole time at anchor; drag monitoring continues via the regular
+            // anchor alarm notification.
             anchorPhase = 'set'
-            updateAnchorLiveActivity(true)
+            endAnchorLiveActivity()
           } else if (
             (state === 'normal' || state === 'nominal') &&
             anchorPhase !== null
