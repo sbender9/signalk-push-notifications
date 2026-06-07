@@ -1317,12 +1317,13 @@ const start = (app: ServerAPI): Plugin => {
         } else if (vp.path === ANCHORING_ENDED) {
           const state = notificationState(vp.value)
           if (state === 'alert') {
-            // Radius locked: deployment complete. End the Live Activity here
-            // (with a final "set" state) rather than stream updates for the
-            // whole time at anchor; drag monitoring continues via the regular
-            // anchor alarm notification.
+            // Radius locked: deployment complete. Show the final "set"
+            // (green "Anchored") state and stop routine position updates, but
+            // keep the activity alive until the anchor is raised. An idle "set"
+            // activity sends no further events (no cost); only a drag state
+            // change updates it, and raising ends it.
             anchorPhase = 'set'
-            endAnchorLiveActivity()
+            updateAnchorLiveActivity(true)
           } else if (
             (state === 'normal' || state === 'nominal') &&
             anchorPhase !== null
@@ -1343,7 +1344,10 @@ const start = (app: ServerAPI): Plugin => {
           }
         } else if (ANCHOR_DATA_PATHS.indexOf(vp.path) !== -1) {
           anchorData[vp.path] = vp.value
-          if (anchorPhase !== null) {
+          // Stream routine position updates while deploying or dragging, but
+          // not once "set" -- the activity then sits idle (green "Anchored")
+          // with no further events until it drags or is raised.
+          if (anchorPhase !== null && anchorPhase !== 'set') {
             updateAnchorLiveActivity(false)
           }
         }
