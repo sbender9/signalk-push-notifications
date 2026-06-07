@@ -1536,7 +1536,7 @@ const start = (app: ServerAPI): Plugin => {
 
     app.debug('sending live activity (%s) to %j: %j', aps.aps.event, tokens, aps)
 
-    invokeLambda('sendLiveActivity', { tokens, aps, priority, test: false })
+    invokeLambda('sendLiveActivityPush', { tokens, aps, priority, test: false })
       .then((response) => {
         app.debug(response.logs)
         app.debug(response.result)
