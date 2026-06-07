@@ -964,6 +964,7 @@ const start = (app: ServerAPI): Plugin => {
     }
   }
 
+  let tmpWriteCounter = 0
   function saveJson(
     app: ServerAPI,
     name: string,
@@ -972,28 +973,41 @@ const start = (app: ServerAPI): Plugin => {
     res?: Response,
     cb?: () => void
   ): void {
-    fs.writeFile(
-      pathForPluginId(app, id, name),
-      JSON.stringify(json, null, 2),
-      function (err) {
-        if (err) {
-          app.debug((err as any).stack || err.toString())
-          app.error(err.message || err.toString())
-          if (res) {
-            res.status(500)
-            res.send(err.message || err)
-          }
-          return
-        } else {
-          if (res) {
-            res.send('Success\n')
-          }
-          if (cb) {
-            cb()
-          }
-        }
+    const finalPath = pathForPluginId(app, id, name)
+    // Write to a unique temp file then atomically rename into place. A plain
+    // fs.writeFile truncates the target to zero before writing it, so a
+    // concurrent readJson can read an empty/partial file, fail to JSON.parse
+    // it, and drop the entire device map (causing 404s on registerLiveActivity*
+    // and lost push-to-start tokens). rename() is atomic on the same
+    // filesystem, so readers always see either the old or the new complete file.
+    const tmpPath = finalPath + '.tmp.' + process.pid + '.' + ++tmpWriteCounter
+    const onError = (err: any) => {
+      app.debug((err as any).stack || err.toString())
+      app.error(err.message || err.toString())
+      if (res) {
+        res.status(500)
+        res.send(err.message || err)
       }
-    )
+    }
+    fs.writeFile(tmpPath, JSON.stringify(json, null, 2), function (err) {
+      if (err) {
+        onError(err)
+        return
+      }
+      fs.rename(tmpPath, finalPath, function (renameErr) {
+        if (renameErr) {
+          fs.unlink(tmpPath, () => {})
+          onError(renameErr)
+          return
+        }
+        if (res) {
+          res.send('Success\n')
+        }
+        if (cb) {
+          cb()
+        }
+      })
+    })
   }
 
   function send_background_push(
