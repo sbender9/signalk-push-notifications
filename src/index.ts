@@ -643,7 +643,9 @@ const start = (app: ServerAPI): Plugin => {
           if (
             notificationValue != null &&
             typeof notificationValue.message !== 'undefined' &&
-            notificationValue.message != null
+            notificationValue.message != null &&
+            notificationValue.method != undefined &&
+            notificationValue.method.length > 0
           ) {
             if (
               (last_states[value.path] == null &&
