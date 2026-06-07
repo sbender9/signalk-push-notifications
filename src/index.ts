@@ -209,13 +209,14 @@ const start = (app: ServerAPI): Plugin => {
       }
     })
 
-    // Only subscribe to the anchor data feed when some device can host the
-    // Live Activity, to avoid needless deltas otherwise.
-    if (hasLiveActivity) {
-      ANCHOR_DATA_PATHS.forEach((path) => {
-        command.subscribe.push({ path: path, period: 1000 })
-      })
-    }
+    // Always subscribe to the anchor data feed so Live Activity updates work
+    // even when the push-to-start token registers after the plugin starts (the
+    // common case: the app connects after the server is already running).
+    // updateAnchorLiveActivity() no-ops when there is no active activity/token.
+    ANCHOR_DATA_PATHS.forEach((path) => {
+      command.subscribe.push({ path: path, period: 1000 })
+    })
+    app.debug('anchor data subscription added (hasLiveActivity=' + hasLiveActivity + ')')
 
     app.debug('subscription: ' + JSON.stringify(command))
 
