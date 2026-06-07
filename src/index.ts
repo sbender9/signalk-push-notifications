@@ -167,6 +167,10 @@ const start = (app: ServerAPI): Plugin => {
   // Anchor Live Activity state (single self vessel)
   const anchorData: { [path: string]: any } = {}
   let anchorPhase: AnchorPhase | null = null
+  // Last seen state of notifications.navigation.anchoring.started. Used to
+  // tell a genuine raise (started has left 'alert') from the resting
+  // 'ended=normal' value replayed when the subscription is rebuilt.
+  let lastAnchoringStartedState: string | undefined
   let lastAnchorUpdate = 0
   let anchorUpdateTimer: NodeJS.Timeout | undefined
 
@@ -1325,7 +1329,13 @@ const start = (app: ServerAPI): Plugin => {
         if (vp.path == null) return
 
         if (vp.path === ANCHORING_STARTED) {
-          if (notificationState(vp.value) === 'alert') {
+          const state = notificationState(vp.value)
+          lastAnchoringStartedState = state
+          // Only start on a real drop. An 'alert' seen while an activity is
+          // already running is the retained value replayed when the
+          // subscription is rebuilt (e.g. a device re-registers its token);
+          // starting again would duplicate the activity.
+          if (state === 'alert' && anchorPhase === null) {
             startAnchorLiveActivity()
           }
         } else if (vp.path === ANCHORING_ENDED) {
@@ -1336,12 +1346,21 @@ const start = (app: ServerAPI): Plugin => {
             // keep the activity alive until the anchor is raised. An idle "set"
             // activity sends no further events (no cost); only a drag state
             // change updates it, and raising ends it.
-            anchorPhase = 'set'
-            updateAnchorLiveActivity(true)
+            if (anchorPhase !== null && anchorPhase !== 'set') {
+              anchorPhase = 'set'
+              updateAnchorLiveActivity(true)
+            }
           } else if (
             (state === 'normal' || state === 'nominal') &&
-            anchorPhase !== null
+            anchorPhase !== null &&
+            lastAnchoringStartedState !== 'alert'
           ) {
+            // A real raise sets BOTH anchoring.started and anchoring.ended to
+            // 'normal'. While deploying, anchoring.started is still 'alert' and
+            // anchoring.ended sits at its resting 'normal' -- replaying that
+            // retained 'normal' on a re-subscribe must NOT tear down the live
+            // activity. Requiring started to have left 'alert' distinguishes a
+            // genuine raise from the replayed resting state.
             endAnchorLiveActivity()
           }
         } else if (vp.path === ANCHOR_ALARM_PATH && anchorPhase !== null) {
