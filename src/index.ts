@@ -148,7 +148,7 @@ const ANCHOR_DATA_PATHS = [
   'navigation.anchor.apparentBearing'
 ]
 // Routine content updates are rate-shaped by Apple; don't push every delta.
-const ANCHOR_UPDATE_THROTTLE_MS = 5000
+const ANCHOR_UPDATE_THROTTLE_MS = 10000
 
 type AnchorPhase = 'deploying' | 'set' | 'dragging'
 
@@ -1519,8 +1519,12 @@ const start = (app: ServerAPI): Plugin => {
         'content-state': buildAnchorContentState()
       }
     }
-    // Dragging is urgent; routine deployment updates are low priority.
-    const priority = anchorPhase === 'dragging' ? 10 : 5
+    // Send all anchor updates at high priority (10) so each is delivered
+    // immediately with no defer lag. Volume is bounded by the 10s
+    // ANCHOR_UPDATE_THROTTLE_MS floor, which keeps the update count low enough to
+    // stay within Apple's LA update budget. Pairs with the app's
+    // NSSupportsLiveActivitiesFrequentUpdates key.
+    const priority = 10
     sendLiveActivity(tokens, aps, priority)
   }
 
