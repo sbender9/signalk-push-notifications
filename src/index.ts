@@ -1519,8 +1519,11 @@ const start = (app: ServerAPI): Plugin => {
         'content-state': buildAnchorContentState()
       }
     }
-    // Dragging is urgent; routine deployment updates are low priority.
-    const priority = anchorPhase === 'dragging' ? 10 : 5
+    // Send all anchor updates at high priority (10) so frequent deploy-phase
+    // updates are not deferred/coalesced by iOS. Pairs with the app's
+    // NSSupportsLiveActivitiesFrequentUpdates Info.plist key, which raises the
+    // budget for frequent Live Activity pushes.
+    const priority = 10
     sendLiveActivity(tokens, aps, priority)
   }
 
