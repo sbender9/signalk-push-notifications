@@ -1434,6 +1434,12 @@ const start = (app: ServerAPI): Plugin => {
   function pushToStartTokens(devices: { [k: string]: Device }): TokenInfo[] {
     const tokens: TokenInfo[] = []
     Object.values(devices).forEach((d: Device) => {
+      // Skip devices that already have a running activity (e.g. the app started
+      // one locally on a foreground/in-app drop). A push-to-start would spawn a
+      // duplicate; such a device is updated via its registered per-activity
+      // update token instead.
+      const acts = d.liveActivity?.activities
+      if (acts && Object.keys(acts).length > 0) return
       if (d.liveActivity?.pushToStartToken) {
         tokens.push({
           token: d.liveActivity.pushToStartToken,
