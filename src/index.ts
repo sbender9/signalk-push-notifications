@@ -149,6 +149,10 @@ const ANCHOR_DATA_PATHS = [
 ]
 // Routine content updates are rate-shaped by Apple; don't push every delta.
 const ANCHOR_UPDATE_THROTTLE_MS = 10000
+// Every push stamps a stale-date this far ahead, so if updates stop arriving
+// (server down, connectivity lost) the activity visibly dims instead of
+// silently wearing a frozen "all good" green. Six missed 10s updates.
+const ANCHOR_STALE_AFTER_S = 60
 
 type AnchorPhase = 'deploying' | 'set' | 'dragging'
 
@@ -1483,7 +1487,7 @@ const start = (app: ServerAPI): Plugin => {
         'attributes-type': ANCHOR_ATTRIBUTES_TYPE,
         attributes: buildAnchorAttributes(),
         alert: { title: 'Anchor', body: 'Anchoring in progress' },
-        'stale-date': now + 3600
+        'stale-date': now + ANCHOR_STALE_AFTER_S
       }
     }
     lastAnchorUpdate = Date.now()
@@ -1522,7 +1526,8 @@ const start = (app: ServerAPI): Plugin => {
       aps: {
         timestamp: Math.floor(now / 1000),
         event: 'update',
-        'content-state': buildAnchorContentState()
+        'content-state': buildAnchorContentState(),
+        'stale-date': Math.floor(now / 1000) + ANCHOR_STALE_AFTER_S
       }
     }
     // Send all anchor updates at high priority (10) so each is delivered
