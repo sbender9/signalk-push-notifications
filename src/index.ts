@@ -39,6 +39,23 @@ interface Device {
       widgets?: Widget[]
     }
   }
+  liveActivity?: LiveActivityInfo
+}
+
+// ActivityKit Live Activity push tokens for the anchor monitoring activity.
+// `pushToStartToken` (one per device, iOS 17.2+) lets us remotely START an
+// activity; each running activity reports back its own `updateToken` which is
+// used for content updates and ending it.
+interface LiveActivityInstance {
+  updateToken: string
+  production: boolean
+  startedAt: number
+}
+
+interface LiveActivityInfo {
+  pushToStartToken?: string
+  production?: boolean
+  activities?: { [activityId: string]: LiveActivityInstance }
 }
 
 interface Control {
@@ -111,6 +128,34 @@ interface APSContent {
   'interruption-level'?: string
 }
 
+// Anchor Live Activity lifecycle paths (from signalk-anchoralarm-plugin).
+//   anchoring.started -> 'alert'  : anchor dropped, rode deploying   -> START
+//   anchoring.ended   -> 'alert'  : radius locked, anchoring complete -> END (final set)
+//   anchoring.ended   -> 'normal' : anchor raised before set          -> END
+//   navigation.anchor  alarm/emergency : boat dragging               -> UPDATE (dragging)
+const ANCHORING_STARTED = 'notifications.navigation.anchoring.started'
+const ANCHORING_ENDED = 'notifications.navigation.anchoring.ended'
+const ANCHOR_ALARM_PATH = 'notifications.navigation.anchor'
+// Must match the Swift `AnchorActivityAttributes` struct name exactly.
+const ANCHOR_ATTRIBUTES_TYPE = 'AnchorActivityAttributes'
+// SignalK data paths whose changes drive content-state updates.
+const ANCHOR_DATA_PATHS = [
+  'navigation.anchor.position',
+  'navigation.anchor.maxRadius',
+  'navigation.anchor.distanceFromBow',
+  'navigation.anchor.rodeLength',
+  'navigation.anchor.bearingTrue',
+  'navigation.anchor.apparentBearing'
+]
+// Routine content updates are rate-shaped by Apple; don't push every delta.
+const ANCHOR_UPDATE_THROTTLE_MS = 10000
+// Every push stamps a stale-date this far ahead, so if updates stop arriving
+// (server down, connectivity lost) the activity visibly dims instead of
+// silently wearing a frozen "all good" green. Six missed 10s updates.
+const ANCHOR_STALE_AFTER_S = 60
+
+type AnchorPhase = 'deploying' | 'set' | 'dragging'
+
 const start = (app: ServerAPI): Plugin => {
   const unsubscribes: (() => void)[] = []
   const plugin: Plugin = {} as Plugin
@@ -122,6 +167,16 @@ const start = (app: ServerAPI): Plugin => {
   const switchStates: { [path: string]: any } = {}
   let decodedIcon: any
   const repeatingNotifications: { [path: string]: NodeJS.Timeout } = {}
+
+  // Anchor Live Activity state (single self vessel)
+  const anchorData: { [path: string]: any } = {}
+  let anchorPhase: AnchorPhase | null = null
+  // Last seen state of notifications.navigation.anchoring.started. Used to
+  // tell a genuine raise (started has left 'alert') from the resting
+  // 'ended=normal' value replayed when the subscription is rebuilt.
+  let lastAnchoringStartedState: string | undefined
+  let lastAnchorUpdate = 0
+  let anchorUpdateTimer: NodeJS.Timeout | undefined
 
   plugin.start = function (props: PluginConfig) {
     decodedIcon = JSON.parse(Buffer.from(icon, 'base64').toString('utf8'))
@@ -147,6 +202,7 @@ const start = (app: ServerAPI): Plugin => {
     }
 
     const devices = readJson(app, 'devices', plugin.id)
+    let hasLiveActivity = false
     Object.values(devices).forEach((device: Device) => {
       if (device.registeredPaths) {
         Object.keys(device.registeredPaths).forEach((path) => {
@@ -156,7 +212,19 @@ const start = (app: ServerAPI): Plugin => {
           })
         })
       }
+      if (device.liveActivity?.pushToStartToken) {
+        hasLiveActivity = true
+      }
     })
+
+    // Always subscribe to the anchor data feed so Live Activity updates work
+    // even when the push-to-start token registers after the plugin starts (the
+    // common case: the app connects after the server is already running).
+    // updateAnchorLiveActivity() no-ops when there is no active activity/token.
+    ANCHOR_DATA_PATHS.forEach((path) => {
+      command.subscribe.push({ path: path, period: 1000 })
+    })
+    app.debug('anchor data subscription added (hasLiveActivity=' + hasLiveActivity + ')')
 
     app.debug('subscription: ' + JSON.stringify(command))
 
@@ -174,6 +242,7 @@ const start = (app: ServerAPI): Plugin => {
 
   function got_delta(notification: Delta): void {
     handleNotificationDelta(app, plugin.id, notification, last_states)
+    handleAnchorLiveActivity(notification)
   }
 
   plugin.signalKApiRoutes = (router: Router): Router => {
@@ -280,6 +349,112 @@ const start = (app: ServerAPI): Plugin => {
           saveJson(app, 'devices', plugin.id, devices, res, () => {
             setupSubscriptions()
           })
+        }
+      }
+    )
+
+    // Register a device's Live Activity push-to-start token (iOS 17.2+).
+    router.post(
+      '/wsk/push/registerLiveActivityToken',
+      (req: Request, res: Response) => {
+        const { deviceToken, pushToStartToken, production } = req.body
+        if (deviceToken === undefined || pushToStartToken === undefined) {
+          app.debug('invalid request: %O', req.body)
+          res.status(400)
+          res.send('Invalid Request')
+          return
+        }
+
+        const devices = readJson(app, 'devices', plugin.id)
+        const device = devices[deviceToken]
+        if (!device) {
+          app.debug(`unknown device ${deviceToken}`)
+          res.status(404)
+          res.send('Invalid Request')
+          return
+        }
+
+        if (!device.liveActivity) {
+          device.liveActivity = { activities: {} }
+        }
+        device.liveActivity.pushToStartToken = pushToStartToken
+        device.liveActivity.production =
+          production !== undefined ? production : device.production
+
+        app.debug('registered push-to-start token for %j', device.deviceName)
+        saveJson(app, 'devices', plugin.id, devices, res, () => {
+          setupSubscriptions()
+        })
+      }
+    )
+
+    // A running Live Activity reports its per-activity update token.
+    router.post(
+      '/wsk/push/registerLiveActivityUpdate',
+      (req: Request, res: Response) => {
+        const { deviceToken, activityId, updateToken, production } = req.body
+        if (
+          deviceToken === undefined ||
+          activityId === undefined ||
+          updateToken === undefined
+        ) {
+          app.debug('invalid request: %O', req.body)
+          res.status(400)
+          res.send('Invalid Request')
+          return
+        }
+
+        const devices = readJson(app, 'devices', plugin.id)
+        const device = devices[deviceToken]
+        if (!device) {
+          app.debug(`unknown device ${deviceToken}`)
+          res.status(404)
+          res.send('Invalid Request')
+          return
+        }
+
+        if (!device.liveActivity) {
+          device.liveActivity = { activities: {} }
+        }
+        if (!device.liveActivity.activities) {
+          device.liveActivity.activities = {}
+        }
+        device.liveActivity.activities[activityId] = {
+          updateToken,
+          production:
+            production !== undefined
+              ? production
+              : (device.liveActivity.production ?? device.production ?? true),
+          startedAt: Date.now()
+        }
+
+        app.debug('registered activity %s for %j', activityId, device.deviceName)
+        saveJson(app, 'devices', plugin.id, devices, res)
+      }
+    )
+
+    // The app can explicitly drop a finished/dismissed activity.
+    router.post(
+      '/wsk/push/endLiveActivity',
+      (req: Request, res: Response) => {
+        const { deviceToken, activityId } = req.body
+        if (deviceToken === undefined) {
+          res.status(400)
+          res.send('Invalid Request')
+          return
+        }
+
+        const devices = readJson(app, 'devices', plugin.id)
+        const device = devices[deviceToken]
+        if (device?.liveActivity?.activities) {
+          if (activityId !== undefined) {
+            delete device.liveActivity.activities[activityId]
+          } else {
+            device.liveActivity.activities = {}
+          }
+          saveJson(app, 'devices', plugin.id, devices, res)
+        } else {
+          res.send('Success\n')
         }
       }
     )
@@ -797,6 +972,7 @@ const start = (app: ServerAPI): Plugin => {
     }
   }
 
+  let tmpWriteCounter = 0
   function saveJson(
     app: ServerAPI,
     name: string,
@@ -805,28 +981,41 @@ const start = (app: ServerAPI): Plugin => {
     res?: Response,
     cb?: () => void
   ): void {
-    fs.writeFile(
-      pathForPluginId(app, id, name),
-      JSON.stringify(json, null, 2),
-      function (err) {
-        if (err) {
-          app.debug((err as any).stack || err.toString())
-          app.error(err.message || err.toString())
-          if (res) {
-            res.status(500)
-            res.send(err.message || err)
-          }
-          return
-        } else {
-          if (res) {
-            res.send('Success\n')
-          }
-          if (cb) {
-            cb()
-          }
-        }
+    const finalPath = pathForPluginId(app, id, name)
+    // Write to a unique temp file then atomically rename into place. A plain
+    // fs.writeFile truncates the target to zero before writing it, so a
+    // concurrent readJson can read an empty/partial file, fail to JSON.parse
+    // it, and drop the entire device map (causing 404s on registerLiveActivity*
+    // and lost push-to-start tokens). rename() is atomic on the same
+    // filesystem, so readers always see either the old or the new complete file.
+    const tmpPath = finalPath + '.tmp.' + process.pid + '.' + ++tmpWriteCounter
+    const onError = (err: any) => {
+      app.debug((err as any).stack || err.toString())
+      app.error(err.message || err.toString())
+      if (res) {
+        res.status(500)
+        res.send(err.message || err)
       }
-    )
+    }
+    fs.writeFile(tmpPath, JSON.stringify(json, null, 2), function (err) {
+      if (err) {
+        onError(err)
+        return
+      }
+      fs.rename(tmpPath, finalPath, function (renameErr) {
+        if (renameErr) {
+          fs.unlink(tmpPath, () => {})
+          onError(renameErr)
+          return
+        }
+        if (res) {
+          res.send('Success\n')
+        }
+        if (cb) {
+          cb()
+        }
+      })
+    })
   }
 
   function send_background_push(
@@ -1129,6 +1318,285 @@ const start = (app: ServerAPI): Plugin => {
     const result = Buffer.from(Payload!).toString()
     const logs = Buffer.from(LogResult!, 'base64').toString()
     return { logs, result }
+  }
+
+  // ---- Anchor Live Activity orchestration -------------------------------
+
+  function notificationState(value: any): string | undefined {
+    return value != null ? (value as NotificationValue).state : undefined
+  }
+
+  function handleAnchorLiveActivity(notification: Delta): void {
+    notification.updates.forEach((update: any) => {
+      if (update.values === undefined) return
+      update.values.forEach((vp: ValuePair) => {
+        if (vp.path == null) return
+
+        if (vp.path === ANCHORING_STARTED) {
+          const state = notificationState(vp.value)
+          lastAnchoringStartedState = state
+          // Only start on a real drop. An 'alert' seen while an activity is
+          // already running is the retained value replayed when the
+          // subscription is rebuilt (e.g. a device re-registers its token);
+          // starting again would duplicate the activity.
+          if (state === 'alert' && anchorPhase === null) {
+            startAnchorLiveActivity()
+          }
+        } else if (vp.path === ANCHORING_ENDED) {
+          const state = notificationState(vp.value)
+          if (state === 'alert') {
+            // Radius locked: deployment complete. Show the final "set"
+            // (green "Anchored") state and stop routine position updates, but
+            // keep the activity alive until the anchor is raised. An idle "set"
+            // activity sends no further events (no cost); only a drag state
+            // change updates it, and raising ends it.
+            if (anchorPhase !== null && anchorPhase !== 'set') {
+              anchorPhase = 'set'
+              updateAnchorLiveActivity(true)
+            }
+          } else if (
+            (state === 'normal' || state === 'nominal') &&
+            anchorPhase !== null &&
+            lastAnchoringStartedState !== 'alert'
+          ) {
+            // A real raise sets BOTH anchoring.started and anchoring.ended to
+            // 'normal'. While deploying, anchoring.started is still 'alert' and
+            // anchoring.ended sits at its resting 'normal' -- replaying that
+            // retained 'normal' on a re-subscribe must NOT tear down the live
+            // activity. Requiring started to have left 'alert' distinguishes a
+            // genuine raise from the replayed resting state.
+            endAnchorLiveActivity()
+          }
+        } else if (vp.path === ANCHOR_ALARM_PATH && anchorPhase !== null) {
+          const state = notificationState(vp.value)
+          if (state === 'alarm' || state === 'emergency') {
+            anchorPhase = 'dragging'
+            updateAnchorLiveActivity(true)
+          } else if (
+            (state === 'normal' || state === 'nominal') &&
+            anchorPhase === 'dragging'
+          ) {
+            anchorPhase = 'set'
+            updateAnchorLiveActivity(true)
+          }
+        } else if (ANCHOR_DATA_PATHS.indexOf(vp.path) !== -1) {
+          anchorData[vp.path] = vp.value
+          // Stream routine position updates while deploying or dragging, but
+          // not once "set" -- the activity then sits idle (green "Anchored")
+          // with no further events until it drags or is raised.
+          if (anchorPhase !== null && anchorPhase !== 'set') {
+            updateAnchorLiveActivity(false)
+          }
+        }
+      })
+    })
+  }
+
+  function numOrNull(value: any): number | null {
+    return typeof value === 'number' ? value : null
+  }
+
+  function depthFromPosition(): number | null {
+    const pos = anchorData['navigation.anchor.position']
+    return pos && typeof pos.altitude === 'number' ? Math.abs(pos.altitude) : null
+  }
+
+  function buildAnchorContentState(): any {
+    return {
+      phase: anchorPhase,
+      distanceFromBow: numOrNull(anchorData['navigation.anchor.distanceFromBow']),
+      rodeLength: numOrNull(anchorData['navigation.anchor.rodeLength']),
+      bearingTrue:
+        numOrNull(anchorData['navigation.anchor.bearingTrue']) ??
+        numOrNull(anchorData['navigation.anchor.apparentBearing']),
+      maxRadius: numOrNull(anchorData['navigation.anchor.maxRadius']),
+      depth: depthFromPosition(),
+      updatedAt: Math.floor(Date.now() / 1000)
+    }
+  }
+
+  function buildAnchorAttributes(): any {
+    const pos = anchorData['navigation.anchor.position']
+    return {
+      anchorLatitude: pos && typeof pos.latitude === 'number' ? pos.latitude : null,
+      anchorLongitude:
+        pos && typeof pos.longitude === 'number' ? pos.longitude : null,
+      depthAtDrop: depthFromPosition(),
+      vesselName: (app as any).getSelfPath('name') ?? null
+    }
+  }
+
+  function refreshAnchorDataFromState(): void {
+    ANCHOR_DATA_PATHS.forEach((p) => {
+      const v = (app as any).getSelfPath(p + '.value')
+      if (v !== undefined && v !== null) {
+        anchorData[p] = v
+      }
+    })
+  }
+
+  function pushToStartTokens(devices: { [k: string]: Device }): TokenInfo[] {
+    const tokens: TokenInfo[] = []
+    Object.values(devices).forEach((d: Device) => {
+      // Skip devices that already have a running activity (e.g. the app started
+      // one locally on a foreground/in-app drop). A push-to-start would spawn a
+      // duplicate; such a device is updated via its registered per-activity
+      // update token instead.
+      const acts = d.liveActivity?.activities
+      if (acts && Object.keys(acts).length > 0) return
+      if (d.liveActivity?.pushToStartToken) {
+        tokens.push({
+          token: d.liveActivity.pushToStartToken,
+          production: d.liveActivity.production ?? d.production ?? true
+        })
+      }
+    })
+    return tokens
+  }
+
+  function activityUpdateTokens(devices: { [k: string]: Device }): TokenInfo[] {
+    const tokens: TokenInfo[] = []
+    Object.values(devices).forEach((d: Device) => {
+      const acts = d.liveActivity?.activities
+      if (acts) {
+        Object.values(acts).forEach((a) => {
+          tokens.push({ token: a.updateToken, production: a.production })
+        })
+      }
+    })
+    return tokens
+  }
+
+  function startAnchorLiveActivity(): void {
+    anchorPhase = 'deploying'
+    refreshAnchorDataFromState()
+
+    const devices = readJson(app, 'devices', plugin.id)
+    const tokens = pushToStartTokens(devices)
+    if (tokens.length === 0) {
+      app.debug('no push-to-start tokens for anchor live activity')
+      return
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    const aps = {
+      aps: {
+        timestamp: now,
+        event: 'start',
+        'content-state': buildAnchorContentState(),
+        'attributes-type': ANCHOR_ATTRIBUTES_TYPE,
+        attributes: buildAnchorAttributes(),
+        alert: { title: 'Anchor', body: 'Anchoring in progress' },
+        'stale-date': now + ANCHOR_STALE_AFTER_S
+      }
+    }
+    lastAnchorUpdate = Date.now()
+    sendLiveActivity(tokens, aps, 10)
+  }
+
+  function updateAnchorLiveActivity(force: boolean): void {
+    if (anchorPhase === null) return
+
+    const now = Date.now()
+    if (!force) {
+      const elapsed = now - lastAnchorUpdate
+      if (elapsed < ANCHOR_UPDATE_THROTTLE_MS) {
+        // Coalesce: schedule a single trailing update.
+        if (!anchorUpdateTimer) {
+          anchorUpdateTimer = setTimeout(() => {
+            anchorUpdateTimer = undefined
+            updateAnchorLiveActivity(true)
+          }, ANCHOR_UPDATE_THROTTLE_MS - elapsed)
+        }
+        return
+      }
+    }
+
+    if (anchorUpdateTimer) {
+      clearTimeout(anchorUpdateTimer)
+      anchorUpdateTimer = undefined
+    }
+    lastAnchorUpdate = now
+
+    const devices = readJson(app, 'devices', plugin.id)
+    const tokens = activityUpdateTokens(devices)
+    if (tokens.length === 0) return
+
+    const aps = {
+      aps: {
+        timestamp: Math.floor(now / 1000),
+        event: 'update',
+        'content-state': buildAnchorContentState(),
+        'stale-date': Math.floor(now / 1000) + ANCHOR_STALE_AFTER_S
+      }
+    }
+    // Send all anchor updates at high priority (10) so each is delivered
+    // immediately with no defer lag. Volume is bounded by the 10s
+    // ANCHOR_UPDATE_THROTTLE_MS floor, which keeps the update count low enough to
+    // stay within Apple's LA update budget. Pairs with the app's
+    // NSSupportsLiveActivitiesFrequentUpdates key.
+    const priority = 10
+    sendLiveActivity(tokens, aps, priority)
+  }
+
+  function endAnchorLiveActivity(): void {
+    const devices = readJson(app, 'devices', plugin.id)
+    const tokens = activityUpdateTokens(devices)
+    const now = Math.floor(Date.now() / 1000)
+
+    if (tokens.length > 0) {
+      const aps = {
+        aps: {
+          timestamp: now,
+          event: 'end',
+          'content-state': buildAnchorContentState(),
+          'dismissal-date': now
+        }
+      }
+      sendLiveActivity(tokens, aps, 10)
+    }
+
+    let changed = false
+    Object.values(devices).forEach((d: Device) => {
+      if (d.liveActivity?.activities) {
+        d.liveActivity.activities = {}
+        changed = true
+      }
+    })
+    if (changed) {
+      saveJson(app, 'devices', plugin.id, devices)
+    }
+
+    anchorPhase = null
+    if (anchorUpdateTimer) {
+      clearTimeout(anchorUpdateTimer)
+      anchorUpdateTimer = undefined
+    }
+  }
+
+  function sendLiveActivity(
+    tokens: TokenInfo[],
+    aps: any,
+    priority: number
+  ): void {
+    if (
+      typeof config.enableRemotePush !== 'undefined' &&
+      !config.enableRemotePush
+    ) {
+      app.debug('remote push disabled, skipping live activity')
+      return
+    }
+
+    app.debug('sending live activity (%s) to %j: %j', aps.aps.event, tokens, aps)
+
+    invokeLambda('sendLiveActivityPush', { tokens, aps, priority, test: false })
+      .then((response) => {
+        app.debug(response.logs)
+        app.debug(response.result)
+      })
+      .catch((err) => {
+        app.error(err)
+      })
   }
 
   return plugin
